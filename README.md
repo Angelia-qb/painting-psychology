@@ -65,6 +65,8 @@ cp .env.example .env
 AI_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-xxxxx
 AI_MODEL=claude-sonnet-4-20250514
+# 自建或中转的 Anthropic 兼容网关可覆盖地址：
+# ANTHROPIC_BASE_URL=http://127.0.0.1:18790
 
 # 或使用 OpenAI
 # AI_PROVIDER=openai
@@ -77,7 +79,7 @@ AI_MODEL=claude-sonnet-4-20250514
 | Provider | 说明 | 必填变量 |
 |---|---|---|
 | `openai` | OpenAI 官方，或任何 OpenAI 兼容网关 | `OPENAI_API_KEY`，可选 `OPENAI_BASE_URL` |
-| `anthropic` | Claude（推荐，中文表达细腻） | `ANTHROPIC_API_KEY` |
+| `anthropic` | Claude（推荐，中文表达细腻） | `ANTHROPIC_API_KEY`，可选 `ANTHROPIC_BASE_URL` |
 | `mock` | 不调用真实模型，返回占位报告 | 无（用于开发调试） |
 
 **模型必须支持视觉（多模态）**，如 `gpt-4o`、`claude-sonnet-4`、`qwen-vl-max`。
