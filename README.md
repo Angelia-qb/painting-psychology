@@ -135,6 +135,27 @@ npm run build
 node server.js     # 单端口同时提供前端与 API
 ```
 
+### 常驻运行（systemd 用户服务）
+
+```bash
+./install-service.sh          # 安装并启动
+systemctl --user status mindart mindart-tunnel
+systemctl --user restart mindart
+tail -f server.log tunnel.log
+```
+
+服务配置了 `Restart=always`，进程崩溃会自动拉起；配合 `loginctl enable-linger`
+后，退出登录或机器重启也能继续运行。
+
+公网地址在 `tunnel.log` 中：
+
+```bash
+grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" tunnel.log | tail -1
+```
+
+> ⚠️ trycloudflare 快速隧道**每次重启都会换地址**，且无可用性保证。
+> 长期使用应改为具名隧道或部署到云服务器。
+
 ### 数据持久化
 
 画作、问卷与报告默认写在项目下的 `data/`。若项目位于 `/tmp` 等临时目录，
