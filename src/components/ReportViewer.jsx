@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, Loader2, FileText, Calendar, Image, ShieldAlert, Award, HelpCircle, RefreshCw, LifeBuoy } from 'lucide-react';
 import MyReports from './MyReports';
-import { saveMyReport } from '../lib/myReports';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
   ? 'http://localhost:3001'
   : '';
 
-export default function ReportViewer({ initialSessionId }) {
+export default function ReportViewer({ initialSessionId, user }) {
   const [searchId, setSearchId] = useState(initialSessionId || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -24,7 +23,7 @@ export default function ReportViewer({ initialSessionId }) {
     }
 
     try {
-      const response = await fetch(`${API_BASE}/api/report/${sid.trim()}`);
+      const response = await fetch(`${API_BASE}/api/report/${sid.trim()}`, { credentials: 'include' });
       if (!response.ok) {
         const errData = await response.json();
         throw new Error(errData.error || '获取报告失败');
@@ -32,14 +31,6 @@ export default function ReportViewer({ initialSessionId }) {
       const resData = await response.json();
       setData(resData);
 
-      if (resData.answers) {
-        saveMyReport({
-          shortCode: resData.shortCode,
-          sessionId: resData.sessionId,
-          title: resData.answers.drawingTitle,
-          timestamp: resData.answers.timestamp
-        });
-      }
     } catch (err) {
       console.error(err);
       if (!silent) setError(err.message || '网络连接失败，请确保本地服务器已启动。');
@@ -75,7 +66,7 @@ export default function ReportViewer({ initialSessionId }) {
     if (!data?.sessionId) return;
     setRetrying(true);
     try {
-      await fetch(`${API_BASE}/api/report/${data.sessionId}/regenerate`, { method: 'POST' });
+      await fetch(`${API_BASE}/api/report/${data.sessionId}/regenerate`, { method: 'POST', credentials: 'include' });
       await fetchReport(data.sessionId, { silent: true });
     } catch (err) {
       console.error(err);
@@ -113,6 +104,8 @@ export default function ReportViewer({ initialSessionId }) {
         </form>
 
         <MyReports
+          apiBase={API_BASE}
+          user={user}
           onOpen={(code) => {
             setSearchId(code);
             fetchReport(code);
@@ -128,6 +121,19 @@ export default function ReportViewer({ initialSessionId }) {
 
         {data && (
           <div className="report-container margin-top-sm animate-fade-in">
+            {data.viewingAsAdmin && (
+              <div className="alert alert-warning">
+                <ShieldAlert size={20} className="alert-icon" />
+                <div className="alert-content">
+                  <h4>管理员视图</h4>
+                  <p>
+                    你正在查看 <strong>{data.answers.ownerName || '其他用户'}</strong> 的报告。
+                    这是很私密的内容，请谨慎处理。
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Session Metadata */}
             <div className="report-meta-box">
               <div className="meta-item">

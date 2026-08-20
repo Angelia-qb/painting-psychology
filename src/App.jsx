@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Introduction from './components/Introduction';
 import DrawingGuide from './components/DrawingGuide';
 import ImageUploader from './components/ImageUploader';
@@ -6,7 +6,7 @@ import GuidedInquiry from './components/GuidedInquiry';
 import Success from './components/Success';
 import ReportViewer from './components/ReportViewer';
 import Appendix from './components/Appendix';
-import { saveMyReport } from './lib/myReports';
+import Login from './components/Login';
 import './App.css';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
@@ -28,6 +28,28 @@ export default function App() {
   const [shortCode, setShortCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  const [user, setUser] = useState(null);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+      .then((r) => r.json())
+      .then((d) => {
+        setUser(d.user || null);
+        setNeedsSetup(Boolean(d.needsSetup));
+      })
+      .catch(() => setUser(null))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleLogout = async () => {
+    await fetch(`${API_BASE}/api/auth/logout`, { method: 'POST', credentials: 'include' });
+    setUser(null);
+    handleRestart();
+    setActiveTab('test');
+  };
 
   const nextStep = () => setStep((prev) => prev + 1);
   const prevStep = () => setStep((prev) => prev - 1);
@@ -65,6 +87,7 @@ export default function App() {
       // Connect dynamically depending on dev/prod port
       const response = await fetch(`${API_BASE}/api/submit`, {
         method: 'POST',
+        credentials: 'include',
         body: formData
       });
 
@@ -76,14 +99,6 @@ export default function App() {
       const data = await response.json();
       setSessionId(data.sessionId);
       setShortCode(data.shortCode || '');
-
-      // 记到本机，方便之后不用记码也能找回
-      saveMyReport({
-        shortCode: data.shortCode,
-        sessionId: data.sessionId,
-        title: answers.drawingTitle,
-        timestamp: new Date().toISOString()
-      });
 
       setStep(4); // Move to Success screen
     } catch (err) {
@@ -101,6 +116,46 @@ export default function App() {
     { title: '问卷', active: step >= 3 },
     { title: '完成', active: step >= 4 }
   ];
+
+  if (authLoading) {
+    return (
+      <div className="app-container">
+        <main className="app-main">
+          <div className="card text-center">
+            <div className="card-body">载入中…</div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="app-container">
+        <div className="glow-sphere glow-1"></div>
+        <div className="glow-sphere glow-2"></div>
+        <header className="app-header">
+          <div className="brand">
+            <span className="brand-logo">🎨</span>
+            <span className="brand-name">MindArt Studio</span>
+          </div>
+        </header>
+        <main className="app-main">
+          <Login
+            apiBase={API_BASE}
+            needsSetup={needsSetup}
+            onLoggedIn={(u) => {
+              setUser(u);
+              setNeedsSetup(false);
+            }}
+          />
+        </main>
+        <footer className="app-footer">
+          <p>© 2026 MindArt Studio.</p>
+        </footer>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -135,6 +190,14 @@ export default function App() {
             科学附录
           </button>
         </nav>
+
+        <div className="user-chip">
+          <span className="user-name">
+            {user.role === 'admin' && <span className="admin-badge">管理员</span>}
+            {user.username}
+          </span>
+          <button className="btn-logout" onClick={handleLogout}>退出</button>
+        </div>
 
         {/* Stepper (Only visible during Test taking) */}
         {activeTab === 'test' && (
@@ -196,7 +259,7 @@ export default function App() {
         )}
 
         {activeTab === 'report' && (
-          <ReportViewer initialSessionId={shortCode || sessionId} />
+          <ReportViewer initialSessionId={shortCode || sessionId} user={user} />
         )}
 
         {activeTab === 'appendix' && (

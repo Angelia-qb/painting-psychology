@@ -9,6 +9,9 @@ import { fileURLToPath } from 'url';
 import { generateReport } from './lib/analyzer.js';
 import { newShortCode, normalizeShortCode } from './lib/shortcode.js';
 import { rateLimit } from './lib/rateLimit.js';
+import { createUserStore } from './lib/users.js';
+import { createAuth, COOKIE_NAME, cookieOptions } from './lib/auth.js';
+import cookieParser from 'cookie-parser';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,8 +19,16 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// 带 Cookie 的跨域请求必须指定具体来源，不能用 *
+app.use(
+  cors({
+    origin: (origin, cb) => cb(null, origin || true),
+    credentials: true
+  })
+);
 app.use(express.json());
+app.use(cookieParser());
+app.set('trust proxy', 1);
 
 /**
  * 数据目录
@@ -53,6 +64,23 @@ function sessionPathOf(sessionId) {
 /* ------------------------------ 短码 ←→ 会话映射 ------------------------------ */
 
 const CODES_FILE = path.join(DATA_DIR, 'codes.json');
+
+/* ------------------------------- 用户与鉴权初始化 ------------------------------ */
+
+const users = createUserStore(DATA_DIR);
+
+// 会话密钥：优先读环境变量，否则生成并持久化，避免重启后所有人被登出
+const SECRET_FILE = path.join(DATA_DIR, '.session-secret');
+function loadSessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  if (fs.existsSync(SECRET_FILE)) return fs.readFileSync(SECRET_FILE, 'utf-8').trim();
+
+  const secret = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(SECRET_FILE, secret, { encoding: 'utf-8', mode: 0o600 });
+  return secret;
+}
+
+const auth = createAuth({ secret: loadSessionSecret() });
 
 function readCodes() {
   if (!fs.existsSync(CODES_FILE)) return {};
@@ -128,6 +156,71 @@ const upload = multer({
   }
 });
 
+
+/* ------------------------------------ 鉴权 ----------------------------------- */
+
+app.use(auth.attachUser);
+
+const authLimiter = rateLimit({
+  scope: 'auth',
+  windowMs: 600_000,
+  max: 20,
+  message: '尝试过于频繁，请十分钟后再试'
+});
+
+/**
+ * 注册。
+ * 首个注册的账号自动成为管理员（超级管理员由部署者先注册）。
+ */
+app.post('/api/auth/register', authLimiter, (req, res) => {
+  const { username, password } = req.body || {};
+
+  try {
+    const isFirst = users.count() === 0;
+    const user = users.create({
+      username,
+      password,
+      role: isFirst ? 'admin' : 'user'
+    });
+
+    const token = auth.issueToken(user);
+    res.cookie(COOKIE_NAME, token, cookieOptions(req));
+    return res.status(201).json({ user, token });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/login', authLimiter, (req, res) => {
+  const { username, password } = req.body || {};
+
+  const user = users.verify(username, password);
+  if (!user) {
+    // 不区分"用户不存在"和"密码错误"，避免用户名枚举
+    return res.status(401).json({ error: '用户名或密码不正确' });
+  }
+
+  const token = auth.issueToken(user);
+  res.cookie(COOKIE_NAME, token, cookieOptions(req));
+  return res.json({ user, token });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie(COOKIE_NAME, { path: '/' });
+  return res.json({ success: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (!req.user) return res.json({ user: null, needsSetup: users.count() === 0 });
+  return res.json({
+    user: {
+      id: req.user.sub,
+      username: req.user.username,
+      role: req.user.role
+    }
+  });
+});
+
 /* ----------------------------------- 限流 ----------------------------------- */
 
 // 报告查询：防止短码被暴力枚举
@@ -154,7 +247,7 @@ const submitLimiter = rateLimit({
  * 保存 answers.json 后立即返回 sessionId，AI 分析在后台异步进行，
  * 前端通过轮询 /api/report/:sessionId 获取结果。
  */
-app.post('/api/submit', submitLimiter, upload.single('drawing'), async (req, res) => {
+app.post('/api/submit', auth.requireAuth, submitLimiter, upload.single('drawing'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: '没有收到画作文件' });
@@ -169,6 +262,8 @@ app.post('/api/submit', submitLimiter, upload.single('drawing'), async (req, res
     const answers = {
       sessionId: req.sessionId,
       shortCode: allocateShortCode(req.sessionId),
+      ownerId: req.user.sub,
+      ownerName: req.user.username,
       timestamp: new Date().toISOString(),
       drawingTitle: drawingTitle || '',
       description: description || '',
@@ -233,87 +328,187 @@ async function runAnalysis(sessionId, answers, imagePath) {
   }
 }
 
-/**
- * 手动重新生成报告（分析失败时可重试）
- */
-app.post('/api/report/:sessionId/regenerate', reportLimiter, async (req, res) => {
-  const sessionId = resolveToSessionId(req.params.sessionId);
-  if (!sessionId) {
-    return res.status(400).json({ error: '查询码格式不正确' });
-  }
-
-  const dir = sessionPathOf(sessionId);
-  const answersPath = path.join(dir, 'answers.json');
-  if (!fs.existsSync(answersPath)) {
-    return res.status(404).json({ error: '会话不存在' });
-  }
-
-  const answers = JSON.parse(fs.readFileSync(answersPath, 'utf-8'));
-  const imagePath = path.join(dir, answers.filename);
-
-  res.status(202).json({ success: true, message: '已重新开始分析', sessionId });
-  runAnalysis(sessionId, answers, imagePath);
-});
 
 /**
- * 获取报告。返回 status 字段供前端轮询：
- *   analyzing / done / failed / pending
+ * 归属校验：普通用户只能访问自己的会话，管理员可访问全部。
+ *
+ * 历史数据（引入登录前生成的）没有 ownerId，仅管理员可见，
+ * 避免旧报告对所有登录用户暴露。
  */
-app.get('/api/report/:sessionId', reportLimiter, (req, res) => {
+function loadOwnedSession(req, res, next) {
   const sessionId = resolveToSessionId(req.params.sessionId);
-
   if (!sessionId) {
     return res.status(400).json({ error: '查询码格式不正确，请检查输入' });
   }
 
   const dir = sessionPathOf(sessionId);
-  const reportPath = path.join(dir, 'report.json');
   const answersPath = path.join(dir, 'answers.json');
-  const statusPath = path.join(dir, 'status.json');
-
-  if (!fs.existsSync(dir)) {
-    return res.status(404).json({ error: '会话ID不存在，请检查输入是否正确' });
+  if (!fs.existsSync(dir) || !fs.existsSync(answersPath)) {
+    return res.status(404).json({ error: '查询码不存在，请检查输入是否正确' });
   }
 
-  const result = {
-    sessionId,
-    shortCode: null,
-    hasAnswers: fs.existsSync(answersPath),
-    hasReport: fs.existsSync(reportPath),
-    answers: null,
-    report: null,
-    status: 'pending',
-    statusMessage: ''
-  };
+  const answers = JSON.parse(fs.readFileSync(answersPath, 'utf-8'));
+  const isAdmin = req.user.role === 'admin';
+  const isOwner = answers.ownerId && answers.ownerId === req.user.sub;
 
-  if (result.hasAnswers) {
-    result.answers = JSON.parse(fs.readFileSync(answersPath, 'utf-8'));
-    result.shortCode = result.answers.shortCode || null;
-  }
-  if (result.hasReport) {
-    result.report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
-  }
-  if (fs.existsSync(statusPath)) {
-    const s = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
-    result.status = s.state;
-    result.statusMessage = s.message;
-  } else if (result.hasReport) {
-    result.status = 'done';
+  if (!isAdmin && !isOwner) {
+    // 用 404 而非 403，避免泄露"这个码确实存在"
+    return res.status(404).json({ error: '查询码不存在，请检查输入是否正确' });
   }
 
-  return res.status(200).json(result);
+  req.sessionIdResolved = sessionId;
+  req.sessionAnswers = answers;
+  next();
+}
+
+/**
+ * 手动重新生成报告（分析失败时可重试）
+ */
+app.post(
+  '/api/report/:sessionId/regenerate',
+  auth.requireAuth,
+  reportLimiter,
+  loadOwnedSession,
+  async (req, res) => {
+  const sessionId = req.sessionIdResolved;
+  const answers = req.sessionAnswers;
+  const imagePath = path.join(sessionPathOf(sessionId), answers.filename);
+
+  res.status(202).json({ success: true, message: '已重新开始分析', sessionId });
+  runAnalysis(sessionId, answers, imagePath);
+  }
+);
+
+/**
+ * 获取报告。返回 status 字段供前端轮询：
+ *   analyzing / done / failed / pending
+ */
+app.get(
+  '/api/report/:sessionId',
+  auth.requireAuth,
+  reportLimiter,
+  loadOwnedSession,
+  (req, res) => {
+    const sessionId = req.sessionIdResolved;
+    const answers = req.sessionAnswers;
+
+    const dir = sessionPathOf(sessionId);
+    const reportPath = path.join(dir, 'report.json');
+    const statusPath = path.join(dir, 'status.json');
+
+    const result = {
+      sessionId,
+      shortCode: answers.shortCode || null,
+      hasAnswers: true,
+      hasReport: fs.existsSync(reportPath),
+      answers,
+      report: null,
+      status: 'pending',
+      statusMessage: '',
+      // 管理员查看他人报告时前端做出标识
+      viewingAsAdmin: req.user.role === 'admin' && answers.ownerId !== req.user.sub
+    };
+
+    if (result.hasReport) {
+      result.report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
+    }
+    if (fs.existsSync(statusPath)) {
+      const st = JSON.parse(fs.readFileSync(statusPath, 'utf-8'));
+      result.status = st.state;
+      result.statusMessage = st.message;
+    } else if (result.hasReport) {
+      result.status = 'done';
+    }
+
+    return res.status(200).json(result);
+  }
+);
+
+/**
+ * 我的报告列表：服务端按 ownerId 过滤。
+ * 管理员加 ?all=1 可查看全部用户的报告。
+ */
+app.get('/api/my-reports', auth.requireAuth, reportLimiter, (req, res) => {
+  const wantAll = req.query.all === '1';
+  if (wantAll && req.user.role !== 'admin') {
+    return res.status(403).json({ error: '需要管理员权限' });
+  }
+
+  const items = [];
+  for (const id of fs.readdirSync(SESSIONS_DIR)) {
+    const answersPath = path.join(SESSIONS_DIR, id, 'answers.json');
+    if (!fs.existsSync(answersPath)) continue;
+
+    let a;
+    try {
+      a = JSON.parse(fs.readFileSync(answersPath, 'utf-8'));
+    } catch {
+      continue;
+    }
+
+    if (!wantAll && a.ownerId !== req.user.sub) continue;
+
+    const reportPath = path.join(SESSIONS_DIR, id, 'report.json');
+    items.push({
+      sessionId: id,
+      shortCode: a.shortCode || null,
+      title: a.drawingTitle || '未命名',
+      timestamp: a.timestamp,
+      hasReport: fs.existsSync(reportPath),
+      ownerName: a.ownerName || null,
+      ownerId: a.ownerId || null
+    });
+  }
+
+  items.sort((x, y) => String(y.timestamp).localeCompare(String(x.timestamp)));
+  return res.json({ items, isAdminView: wantAll });
+});
+
+/* ------------------------------- 管理员接口 -------------------------------- */
+
+app.get('/api/admin/users', auth.requireAdmin, (req, res) => {
+  const list = users.list();
+  const counts = {};
+
+  for (const id of fs.readdirSync(SESSIONS_DIR)) {
+    const p = path.join(SESSIONS_DIR, id, 'answers.json');
+    if (!fs.existsSync(p)) continue;
+    try {
+      const a = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (a.ownerId) counts[a.ownerId] = (counts[a.ownerId] || 0) + 1;
+    } catch {
+      /* 跳过损坏文件 */
+    }
+  }
+
+  return res.json({
+    users: list.map((u) => ({ ...u, reportCount: counts[u.id] || 0 }))
+  });
 });
 
 /* ---------------------------------- 静态资源 --------------------------------- */
 
-// 仅暴露 sessions 下的图片：
-// codes.json 含全部查询码映射，answers/report 应经接口获取，都不能直接下载
-app.use('/data/sessions', (req, res, next) => {
-  if (!/\.(png|jpe?g|webp|gif)$/i.test(req.path)) {
+/**
+ * 画作图片：必须登录，且只能取自己的（管理员除外）。
+ * 不能用 express.static 直接挂，否则任何人拿到路径就能看到别人的画。
+ */
+app.get('/data/sessions/:sessionId/:file', auth.requireAuth, (req, res) => {
+  const { sessionId, file } = req.params;
+
+  if (!isValidSessionId(sessionId) || !/^drawing\.(png|jpe?g|webp|gif)$/i.test(file)) {
     return res.status(404).json({ error: 'Not found' });
   }
-  next();
-}, express.static(SESSIONS_DIR));
+
+  const answersPath = path.join(SESSIONS_DIR, sessionId, 'answers.json');
+  if (!fs.existsSync(answersPath)) return res.status(404).json({ error: 'Not found' });
+
+  const answers = JSON.parse(fs.readFileSync(answersPath, 'utf-8'));
+  const isAdmin = req.user.role === 'admin';
+  const isOwner = answers.ownerId && answers.ownerId === req.user.sub;
+  if (!isAdmin && !isOwner) return res.status(404).json({ error: 'Not found' });
+
+  return res.sendFile(path.join(SESSIONS_DIR, sessionId, file));
+});
 
 const DIST_DIR = path.join(__dirname, 'dist');
 if (fs.existsSync(DIST_DIR)) {

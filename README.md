@@ -21,11 +21,22 @@
 
 ---
 
+## 账号与权限
+
+- 必须注册/登录才能提交画作或查看报告
+- **每个用户只能看到自己的报告**，用别人的查询码查询会返回"不存在"
+- **首个注册的账号自动成为管理员**，可查看全部用户的报告
+- 会话使用 HMAC 签名的 httpOnly Cookie，有效期 30 天
+
+> 部署后请**第一时间自己注册**，以取得管理员账号。
+
+管理员在「查看报告」页可切换「查看全部」，查看他人报告时页面顶部会明确标识。
+
 ## 功能
 
 - 五步引导流程：介绍 → 绘画准备 → 上传作品 → 表达性探索问卷 → 生成报告
 - **8 位查询码**（如 `K7F2-Q9WM`）代替冗长 ID，方便记录和口头转述
-- **我的报告**：本机自动记录历史报告，无需手动保存查询码
+- **我的报告**：与账号绑定，换设备登录后依然可见
 - 多模态 AI 分析，同时读取画作图像与问卷文本
 - 报告包含：整体回应、3~4 个观察维度、具体可执行的建议、开放式自我觉察问题
 - 危机内容自动识别，触发时优先展示心理援助资源而非做深度解读
@@ -50,9 +61,15 @@ cp .env.example .env
 编辑 `.env`：
 
 ```env
-AI_PROVIDER=openai
-OPENAI_API_KEY=sk-xxxxx
-AI_MODEL=gpt-4o
+# 使用 Claude（推荐）
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-xxxxx
+AI_MODEL=claude-sonnet-4-20250514
+
+# 或使用 OpenAI
+# AI_PROVIDER=openai
+# OPENAI_API_KEY=sk-xxxxx
+# AI_MODEL=gpt-4o
 ```
 
 **支持三种 provider：**
@@ -60,7 +77,7 @@ AI_MODEL=gpt-4o
 | Provider | 说明 | 必填变量 |
 |---|---|---|
 | `openai` | OpenAI 官方，或任何 OpenAI 兼容网关 | `OPENAI_API_KEY`，可选 `OPENAI_BASE_URL` |
-| `anthropic` | Claude | `ANTHROPIC_API_KEY` |
+| `anthropic` | Claude（推荐，中文表达细腻） | `ANTHROPIC_API_KEY` |
 | `mock` | 不调用真实模型，返回占位报告 | 无（用于开发调试） |
 
 **模型必须支持视觉（多模态）**，如 `gpt-4o`、`claude-sonnet-4`、`qwen-vl-max`。
@@ -133,11 +150,18 @@ POST /api/submit
 
 ## API
 
-| 方法 | 路径 | 说明 | 限流 |
-|---|---|---|---|
-| `POST` | `/api/submit` | 提交画作与问卷，返回 `sessionId` 与 `shortCode` | 10 次 / 10 分钟 |
-| `GET` | `/api/report/:code` | 获取报告，含 `status`（`analyzing`/`done`/`failed`） | 60 次 / 分钟 |
-| `POST` | `/api/report/:code/regenerate` | 分析失败时重新生成 | 60 次 / 分钟 |
+| 方法 | 路径 | 权限 | 说明 | 限流 |
+|---|---|---|---|---|
+| `POST` | `/api/auth/register` | 公开 | 注册（首个账号为管理员） | 20 次 / 10 分钟 |
+| `POST` | `/api/auth/login` | 公开 | 登录 | 20 次 / 10 分钟 |
+| `POST` | `/api/auth/logout` | 公开 | 退出 | — |
+| `GET` | `/api/auth/me` | 公开 | 当前登录状态 | — |
+| `POST` | `/api/submit` | 登录 | 提交画作，返回 `shortCode` | 10 次 / 10 分钟 |
+| `GET` | `/api/report/:code` | 本人/管理员 | 获取报告 | 60 次 / 分钟 |
+| `POST` | `/api/report/:code/regenerate` | 本人/管理员 | 重新生成 | 60 次 / 分钟 |
+| `GET` | `/api/my-reports` | 登录 | 我的报告列表；管理员加 `?all=1` 看全部 | 60 次 / 分钟 |
+| `GET` | `/api/admin/users` | 管理员 | 用户列表与报告数 | — |
+| `GET` | `/data/sessions/:id/drawing.png` | 本人/管理员 | 画作图片 | — |
 
 `:code` 同时接受 8 位查询码与完整 `sessionId`。查询码不区分大小写，
 连字符可省略（`K7F2-Q9WM` / `k7f2q9wm` / `K7F2 Q9WM` 均可）。
@@ -167,7 +191,9 @@ POST /api/submit
 │   ├── analyzer.js              分析引擎，多 provider 适配 + 输出校验
 │   ├── prompt.js                系统提示词（表达性艺术治疗原则）
 │   ├── shortcode.js             8 位查询码生成与规范化
-│   └── rateLimit.js             内存限流，防止查询码被枚举
+│   ├── rateLimit.js             内存限流，防止查询码被枚举
+│   ├── users.js                 用户存储（scrypt 密码哈希）
+│   └── auth.js                  HMAC 签名会话令牌与权限中间件
 ├── src/
 │   ├── App.jsx                  主流程与状态管理
 │   └── components/
@@ -177,10 +203,12 @@ POST /api/submit
 │       ├── GuidedInquiry.jsx    五问表达性探索问卷
 │       ├── Success.jsx          提交成功
 │       ├── ReportViewer.jsx     报告查询与轮询展示
-│       ├── MyReports.jsx        本机报告列表
+│       ├── Login.jsx            登录与注册
+│       ├── MyReports.jsx        报告列表（含管理员视图）
 │       └── Appendix.jsx         科学附录
-│   └── lib/myReports.js         localStorage 报告记录
 └── data/
+    ├── users.json               账号与密码哈希
+    ├── .session-secret          会话签名密钥（自动生成，权限 600）
     ├── codes.json               查询码 → sessionId 映射
     └── sessions/<sessionId>/    本地数据（已 gitignore）
     ├── drawing.png
@@ -203,7 +231,13 @@ POST /api/submit
 - 静态目录只暴露 `data/sessions/` 下的图片文件；
   `codes.json`（全部查询码映射）与 `answers.json` / `report.json` 均无法直接下载
 
-**注意：** 当前版本没有用户鉴权，任何人拿到查询码都可以查看对应报告。如需部署到公网供多人使用，请自行增加访问控制。
+- 密码使用 scrypt + 每用户独立 salt 哈希存储，校验用 `timingSafeEqual` 防时序攻击
+- 登录失败时不区分"用户不存在"与"密码错误"，避免用户名枚举
+- 越权访问返回 404 而非 403，避免泄露"该查询码确实存在"
+- 画作图片经接口鉴权后下发，不走静态目录
+
+**生产部署建议：** 设置固定的 `SESSION_SECRET` 环境变量（否则首次启动会自动生成并存入
+`data/.session-secret`）。多实例部署时必须显式设置，否则各实例签名不一致。
 
 ---
 
