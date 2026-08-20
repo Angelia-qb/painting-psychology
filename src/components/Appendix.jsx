@@ -1,5 +1,5 @@
 import React from 'react';
-import { BookOpen, FileText, CheckCircle, ShieldAlert, Award } from 'lucide-react';
+import { BookOpen, FileText, ShieldAlert, Award } from 'lucide-react';
 
 export default function Appendix() {
   const sections = [

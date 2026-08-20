@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Loader2, FileText, Calendar, Image, ShieldAlert, Award, HelpCircle } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Search, Loader2, FileText, Calendar, Image, ShieldAlert, Award, HelpCircle, RefreshCw, LifeBuoy } from 'lucide-react';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
   ? 'http://localhost:3001'
@@ -10,21 +10,19 @@ export default function ReportViewer({ initialSessionId }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
+  const [retrying, setRetrying] = useState(false);
+  const pollTimer = useRef(null);
 
-  useEffect(() => {
-    if (initialSessionId) {
-      fetchReport(initialSessionId);
-    }
-  }, [initialSessionId]);
-
-  const fetchReport = async (sid) => {
+  const fetchReport = useCallback(async (sid, { silent = false } = {}) => {
     if (!sid.trim()) return;
-    setLoading(true);
-    setError('');
-    setData(null);
+    if (!silent) {
+      setLoading(true);
+      setError('');
+      setData(null);
+    }
 
     try {
-      const response = await fetch(`${API_BASE}/api/report/${sid}`);
+      const response = await fetch(`${API_BASE}/api/report/${sid.trim()}`);
       if (!response.ok) {
         const errData = await response.json();
         throw new Error(errData.error || '获取报告失败');
@@ -33,15 +31,46 @@ export default function ReportViewer({ initialSessionId }) {
       setData(resData);
     } catch (err) {
       console.error(err);
-      setError(err.message || '网络连接失败，请确保本地服务器已启动。');
+      if (!silent) setError(err.message || '网络连接失败，请确保本地服务器已启动。');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (initialSessionId) {
+      setSearchId(initialSessionId);
+      fetchReport(initialSessionId);
+    }
+  }, [initialSessionId, fetchReport]);
+
+  // 分析进行中时每 3 秒轮询一次，直到出报告或失败
+  useEffect(() => {
+    clearTimeout(pollTimer.current);
+    if (data && data.status === 'analyzing') {
+      pollTimer.current = setTimeout(() => {
+        fetchReport(data.sessionId, { silent: true });
+      }, 3000);
+    }
+    return () => clearTimeout(pollTimer.current);
+  }, [data, fetchReport]);
 
   const handleSearch = (e) => {
     e.preventDefault();
     fetchReport(searchId);
+  };
+
+  const handleRegenerate = async () => {
+    if (!data?.sessionId) return;
+    setRetrying(true);
+    try {
+      await fetch(`${API_BASE}/api/report/${data.sessionId}/regenerate`, { method: 'POST' });
+      await fetchReport(data.sessionId, { silent: true });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRetrying(false);
+    }
   };
 
   return (
@@ -136,25 +165,64 @@ export default function ReportViewer({ initialSessionId }) {
             {/* Analysis report section */}
             <div className="analysis-report-section">
               {!data.hasReport ? (
-                <div className="pending-report-banner">
-                  <Loader2 className="animate-spin text-primary" size={28} />
-                  <div>
-                    <h4>📊 分析数据已成功载入！但报告尚未生成</h4>
-                    <p>
-                      请在聊天窗口中回复 AI 助手：
-                      <br />
-                      <code>我已上传会话ID: {data.sessionId}，请在工作区生成并写入我的分析报告文件。</code>
-                      <br />
-                      AI 助手写入 <code>report.json</code> 文件后，本页面将自动显示您的完整报告！
-                    </p>
+                data.status === 'failed' ? (
+                  <div className="pending-report-banner">
+                    <ShieldAlert className="text-primary" size={28} />
+                    <div>
+                      <h4>分析未能完成</h4>
+                      <p>
+                        {data.statusMessage || '生成报告时出现问题。'}
+                        <br />
+                        你的画作和问卷都已安全保存，可以点击下方按钮重试。
+                      </p>
+                      <button
+                        className="btn btn-primary margin-top-sm"
+                        onClick={handleRegenerate}
+                        disabled={retrying}
+                      >
+                        {retrying ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
+                        重新生成报告
+                      </button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="pending-report-banner">
+                    <Loader2 className="animate-spin text-primary" size={28} />
+                    <div>
+                      <h4>正在阅读你的画……</h4>
+                      <p>
+                        分析通常需要 20~60 秒，页面会自动刷新，不用手动操作。
+                        <br />
+                        如果你想先离开，记下会话ID <code>{data.sessionId}</code>，随时回来查看。
+                      </p>
+                    </div>
+                  </div>
+                )
               ) : (
                 <div className="report-content-box animate-fade-in">
                   <div className="report-header-badge">
                     <Award size={20} />
                     <span>AI 心理分析报告已生成</span>
                   </div>
+
+                  {data.report.safetyFlag && (
+                    <div className="alert alert-warning margin-top-sm">
+                      <LifeBuoy size={20} className="alert-icon" />
+                      <div className="alert-content">
+                        <h4>请照顾好自己</h4>
+                        <p>
+                          你在问卷中提到的一些内容让我们有些担心。如果此刻你正处在难受的状态里，
+                          请让真实的人陪着你 —— 可以联系信任的朋友或家人，也可以拨打心理援助热线：
+                          <br />
+                          <strong>希望24热线 400-161-9995</strong>
+                          <br />
+                          <strong>北京心理危机干预中心 010-82951332</strong>
+                          <br />
+                          本系统不能替代专业帮助。
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="report-summary-quote">
                     <p>“ {data.report.summary} ”</p>

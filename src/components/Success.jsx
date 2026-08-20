@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clipboard, ClipboardCheck, FileText, RefreshCw } from 'lucide-react';
+import { CheckCircle2, Clipboard, ClipboardCheck, FileText, RefreshCw, Sparkles } from 'lucide-react';
 
 export default function Success({ sessionId, onRestart, onViewReport }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    const textToCopy = `我已完成画作上传，我的本地会话ID是: ${sessionId}。请读取该会话的数据并为我做绘画心理学分析报告，并写入 report.json 中让我能在网页上看到报告。`;
-    navigator.clipboard.writeText(textToCopy);
+    navigator.clipboard.writeText(sessionId);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -18,12 +17,12 @@ export default function Success({ sessionId, onRestart, onViewReport }) {
           <CheckCircle2 size={36} className="icon-green" />
         </div>
         <h2 className="gradient-text-success">上传成功！</h2>
-        <p className="subtitle">您的画作与问卷已安全存入本地工作区</p>
+        <p className="subtitle">分析已经开始，通常需要 20~60 秒</p>
       </div>
 
       <div className="card-body">
         <div className="session-info-box">
-          <p className="session-label">本地会话 ID</p>
+          <p className="session-label">你的会话 ID</p>
           <div className="session-value-container">
             <code className="session-value">{sessionId}</code>
           </div>
@@ -33,32 +32,36 @@ export default function Success({ sessionId, onRestart, onViewReport }) {
         </div>
 
         <div className="next-steps-container">
-          <h3>👉 后续流程 (如何获取心理分析)：</h3>
+          <h3>
+            <Sparkles size={16} /> 接下来会发生什么
+          </h3>
           <ol className="steps-ordered-list">
-            <li>点击下方按钮，复制分析指令并发送给 <strong>AI 助手（Antigravity）</strong>。</li>
-            <li>AI 助手将在本地工作区为您生成深度的分析报告文件。</li>
-            <li>点击“前往报告页”按钮，即可直接在网页上查看生成的报告！</li>
+            <li>系统正在结合你的画作与问卷内容生成分析报告。</li>
+            <li>点击下方「查看我的报告」，页面会自动等待并显示结果。</li>
+            <li>
+              想以后再看？把上面的会话 ID 记下来，任何时候在「查看报告」页输入它即可。
+            </li>
           </ol>
         </div>
       </div>
 
       <div className="card-footer-stacked">
-        <button className="btn btn-success btn-full" onClick={handleCopy}>
+        <button className="btn btn-primary btn-full" onClick={onViewReport}>
+          <FileText size={18} />
+          查看我的报告
+        </button>
+        <button className="btn btn-success btn-full margin-top-sm" onClick={handleCopy}>
           {copied ? (
             <>
               <ClipboardCheck size={18} />
-              指令已复制！
+              已复制会话 ID
             </>
           ) : (
             <>
               <Clipboard size={18} />
-              第一步：复制分析指令
+              复制会话 ID
             </>
           )}
-        </button>
-        <button className="btn btn-primary btn-full margin-top-sm" onClick={onViewReport}>
-          <FileText size={18} />
-          第二步：前往报告页
         </button>
         <button className="btn btn-text btn-full margin-top-sm" onClick={onRestart}>
           <RefreshCw size={14} /> 上传另一张画作

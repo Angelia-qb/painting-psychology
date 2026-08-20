@@ -1,5 +1,5 @@
 {
-  "name": "agitated-curie",
+  "name": "painting-psychology",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -14,6 +14,7 @@
   "dependencies": {
     "concurrently": "^10.0.4",
     "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "lucide-react": "^1.30.0",
     "multer": "^2.2.0",
@@ -26,5 +27,6 @@
     "@vitejs/plugin-react": "^6.0.4",
     "oxlint": "^1.75.0",
     "vite": "^8.2.0"
-  }
+  },
+  "description": "MindArt Studio — 基于表达性艺术治疗的绘画心理探索工具"
 }

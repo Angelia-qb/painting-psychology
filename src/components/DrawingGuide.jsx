@@ -1,5 +1,5 @@
 import React from 'react';
-import { PenTool, CheckCircle, ArrowRight } from 'lucide-react';
+import { PenTool, ArrowRight } from 'lucide-react';
 
 export default function DrawingGuide({ onNext, onPrev }) {
   const tips = [

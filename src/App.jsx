@@ -89,11 +89,6 @@ export default function App() {
     { title: '完成', active: step >= 4 }
   ];
 
-  const handleViewReport = (sid) => {
-    setSessionId(sid);
-    setActiveTab('report');
-  };
-
   return (
     <div className="app-container">
       {/* Background decoration elements */}
