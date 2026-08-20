@@ -19,7 +19,17 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
-const SESSIONS_DIR = path.join(__dirname, 'data', 'sessions');
+/**
+ * 数据目录
+ *
+ * 默认写在项目下的 data/，但项目若放在 /tmp 等临时目录会随重启丢失。
+ * 通过 DATA_DIR 环境变量可指向任意持久化位置（如挂载卷、用户目录）。
+ */
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, 'data');
+
+const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 if (!fs.existsSync(SESSIONS_DIR)) {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 }
@@ -42,7 +52,7 @@ function sessionPathOf(sessionId) {
 
 /* ------------------------------ 短码 ←→ 会话映射 ------------------------------ */
 
-const CODES_FILE = path.join(SESSIONS_DIR, '..', 'codes.json');
+const CODES_FILE = path.join(DATA_DIR, 'codes.json');
 
 function readCodes() {
   if (!fs.existsSync(CODES_FILE)) return {};
@@ -296,7 +306,14 @@ app.get('/api/report/:sessionId', reportLimiter, (req, res) => {
 
 /* ---------------------------------- 静态资源 --------------------------------- */
 
-app.use('/data', express.static(path.join(__dirname, 'data')));
+// 仅暴露 sessions 下的图片：
+// codes.json 含全部查询码映射，answers/report 应经接口获取，都不能直接下载
+app.use('/data/sessions', (req, res, next) => {
+  if (!/\.(png|jpe?g|webp|gif)$/i.test(req.path)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  next();
+}, express.static(SESSIONS_DIR));
 
 const DIST_DIR = path.join(__dirname, 'dist');
 if (fs.existsSync(DIST_DIR)) {
@@ -325,4 +342,8 @@ app.listen(PORT, () => {
   const provider = process.env.AI_PROVIDER || 'openai';
   console.log(`[Server] 服务已启动: http://localhost:${PORT}`);
   console.log(`[Server] AI Provider: ${provider}${provider === 'mock' ? ' (开发模式，不调用真实模型)' : ''}`);
+  console.log(`[Server] 数据目录: ${DATA_DIR}`);
+  if (DATA_DIR.startsWith('/tmp/')) {
+    console.warn('[Server] ⚠️  数据存放在 /tmp 下，系统重启后会丢失。请设置 DATA_DIR 指向持久化目录。');
+  }
 });
