@@ -1503,3 +1503,29 @@ h2, h1 {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
 }
+
+/* ============ 科学附录 ============ */
+
+.honest-note {
+  margin-top: 0.6rem;
+  padding: 0.7rem 0.9rem;
+  border-left: 3px solid rgba(212, 160, 23, 0.5);
+  background: rgba(212, 160, 23, 0.06);
+  border-radius: 0 8px 8px 0;
+  font-size: 0.85rem;
+  line-height: 1.65;
+}
+
+.ref-group-title {
+  margin: 1.4rem 0 0.6rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.ref-group-title:first-child {
+  margin-top: 0;
+}
