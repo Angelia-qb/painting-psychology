@@ -533,11 +533,76 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: '服务器内部错误' });
 });
 
+
+/* ------------------------------- 数据完整性审计 ------------------------------- */
+
+/**
+ * 启动时记录数据规模，并与上次记录比对。
+ *
+ * 见 DATA_PROTECTION.md：本项目禁止删除报告数据。
+ * 这里做不了强制拦截（磁盘操作在应用之外），但一旦数据减少会立即告警，
+ * 让问题在发生当次就被发现，而不是等用户来问。
+ */
+function auditDataIntegrity() {
+  const LEDGER = path.join(DATA_DIR, '.data-ledger.json');
+
+  const sessions = fs.existsSync(SESSIONS_DIR)
+    ? fs.readdirSync(SESSIONS_DIR).filter((d) =>
+        fs.existsSync(path.join(SESSIONS_DIR, d, 'answers.json'))
+      )
+    : [];
+  const reports = sessions.filter((d) =>
+    fs.existsSync(path.join(SESSIONS_DIR, d, 'report.json'))
+  );
+  const userCount = Object.keys(
+    fs.existsSync(path.join(DATA_DIR, 'users.json'))
+      ? JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'users.json'), 'utf-8'))
+      : {}
+  ).length;
+
+  const now = {
+    sessions: sessions.length,
+    reports: reports.length,
+    users: userCount,
+    sessionIds: sessions.sort(),
+    checkedAt: new Date().toISOString()
+  };
+
+  if (fs.existsSync(LEDGER)) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(LEDGER, 'utf-8'));
+      const missing = (prev.sessionIds || []).filter((id) => !sessions.includes(id));
+
+      if (missing.length) {
+        console.error('');
+        console.error('╔══════════════════════════════════════════════════════════╗');
+        console.error('║  ⚠️  数据丢失告警：检测到会话记录减少                      ║');
+        console.error('╚══════════════════════════════════════════════════════════╝');
+        console.error(`  上次启动: ${prev.sessions} 个会话 / ${prev.reports} 份报告`);
+        console.error(`  本次启动: ${now.sessions} 个会话 / ${now.reports} 份报告`);
+        console.error(`  丢失的会话 ID:`);
+        missing.forEach((id) => console.error(`    - ${id}`));
+        console.error('');
+        console.error('  本项目禁止删除报告数据，详见 DATA_PROTECTION.md');
+        console.error('  请立即排查原因并从备份恢复。');
+        console.error('');
+      }
+    } catch {
+      /* ledger 损坏则忽略，下面会重写 */
+    }
+  }
+
+  fs.writeFileSync(LEDGER, JSON.stringify(now, null, 2), 'utf-8');
+  return now;
+}
+
 app.listen(PORT, () => {
   const provider = process.env.AI_PROVIDER || 'openai';
   console.log(`[Server] 服务已启动: http://localhost:${PORT}`);
   console.log(`[Server] AI Provider: ${provider}${provider === 'mock' ? ' (开发模式，不调用真实模型)' : ''}`);
   console.log(`[Server] 数据目录: ${DATA_DIR}`);
+  const stats = auditDataIntegrity();
+  console.log(`[Server] 数据规模: ${stats.users} 个账号 / ${stats.sessions} 个会话 / ${stats.reports} 份报告`);
   if (DATA_DIR.startsWith('/tmp/')) {
     console.warn('[Server] ⚠️  数据存放在 /tmp 下，系统重启后会丢失。请设置 DATA_DIR 指向持久化目录。');
   }

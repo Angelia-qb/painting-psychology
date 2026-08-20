@@ -240,6 +240,22 @@ POST /api/submit
 
 ---
 
+## ⚠️ 数据保护
+
+**本项目禁止删除任何报告数据。** 详见 [DATA_PROTECTION.md](./DATA_PROTECTION.md)。
+
+- 需要隐藏数据时，改代码逻辑加过滤标记，不要动磁盘上的文件
+- 用户停用走 `disable()` 软标记，不提供物理删除接口
+- 服务启动时会比对上次的数据规模，**一旦会话减少立即在控制台告警**
+- `backup.sh` 每小时快照一次（只增不减），备份存放在
+  `data/painting-psychology-backups/`
+
+测试时请用独立数据目录，不要在生产目录里造数据再清理：
+
+```bash
+DATA_DIR=/tmp/pp-test npm run dev
+```
+
 ## 隐私与安全
 
 - `data/` 与 `.env` 均已加入 `.gitignore`，不会被提交
