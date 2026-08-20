@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { CheckCircle2, Clipboard, ClipboardCheck, FileText, RefreshCw, Sparkles } from 'lucide-react';
 
-export default function Success({ sessionId, onRestart, onViewReport }) {
+export default function Success({ sessionId, shortCode, onRestart, onViewReport }) {
   const [copied, setCopied] = useState(false);
+  const code = shortCode || sessionId;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(sessionId);
+    navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -22,12 +23,14 @@ export default function Success({ sessionId, onRestart, onViewReport }) {
 
       <div className="card-body">
         <div className="session-info-box">
-          <p className="session-label">你的会话 ID</p>
+          <p className="session-label">你的查询码</p>
           <div className="session-value-container">
-            <code className="session-value">{sessionId}</code>
+            <code className="short-code">{code}</code>
           </div>
           <p className="session-path-note">
-            数据保存在本地：<code>data/sessions/{sessionId}/</code>
+            抄下这 8 位码，之后在「查看报告」页输入它就能找回这份报告。
+            <br />
+            不区分大小写，连字符也可以省略。
           </p>
         </div>
 
@@ -39,7 +42,8 @@ export default function Success({ sessionId, onRestart, onViewReport }) {
             <li>系统正在结合你的画作与问卷内容生成分析报告。</li>
             <li>点击下方「查看我的报告」，页面会自动等待并显示结果。</li>
             <li>
-              想以后再看？把上面的会话 ID 记下来，任何时候在「查看报告」页输入它即可。
+              这台设备已自动记住这份报告，在「查看报告」页顶部可以直接找到它。
+              换设备时才需要用到上面的查询码。
             </li>
           </ol>
         </div>
@@ -54,12 +58,12 @@ export default function Success({ sessionId, onRestart, onViewReport }) {
           {copied ? (
             <>
               <ClipboardCheck size={18} />
-              已复制会话 ID
+              已复制查询码
             </>
           ) : (
             <>
               <Clipboard size={18} />
-              复制会话 ID
+              复制查询码
             </>
           )}
         </button>

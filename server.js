@@ -7,6 +7,8 @@ import crypto from 'crypto';
 import 'dotenv/config';
 import { fileURLToPath } from 'url';
 import { generateReport } from './lib/analyzer.js';
+import { newShortCode, normalizeShortCode } from './lib/shortcode.js';
+import { rateLimit } from './lib/rateLimit.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +26,7 @@ if (!fs.existsSync(SESSIONS_DIR)) {
 
 /* --------------------------------- 工具函数 --------------------------------- */
 
-// sessionId 用随机串而非时间戳，避免被枚举猜到别人的报告
+// 内部目录名仍用长随机串
 function newSessionId() {
   return `session_${crypto.randomBytes(12).toString('hex')}`;
 }
@@ -36,6 +38,49 @@ function isValidSessionId(id) {
 
 function sessionPathOf(sessionId) {
   return path.join(SESSIONS_DIR, sessionId);
+}
+
+/* ------------------------------ 短码 ←→ 会话映射 ------------------------------ */
+
+const CODES_FILE = path.join(SESSIONS_DIR, '..', 'codes.json');
+
+function readCodes() {
+  if (!fs.existsSync(CODES_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(CODES_FILE, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeCodes(codes) {
+  fs.writeFileSync(CODES_FILE, JSON.stringify(codes, null, 2), 'utf-8');
+}
+
+// 生成一个未被占用的短码
+function allocateShortCode(sessionId) {
+  const codes = readCodes();
+  let code;
+  do {
+    code = newShortCode();
+  } while (codes[code]);
+
+  codes[code] = sessionId;
+  writeCodes(codes);
+  return code;
+}
+
+/**
+ * 把用户输入解析成内部 sessionId。
+ * 同时接受短码（K7F2-Q9WM）和完整 sessionId（兼容旧链接）。
+ */
+function resolveToSessionId(input) {
+  if (isValidSessionId(input)) return input;
+
+  const code = normalizeShortCode(input);
+  if (!code) return null;
+
+  return readCodes()[code] || null;
 }
 
 /* ---------------------------------- 上传配置 --------------------------------- */
@@ -73,6 +118,25 @@ const upload = multer({
   }
 });
 
+/* ----------------------------------- 限流 ----------------------------------- */
+
+// 报告查询：防止短码被暴力枚举
+// 正常使用中，前端每 3 秒轮询一次（约 20 次/分钟），因此上限需留出余量
+const reportLimiter = rateLimit({
+  scope: 'report',
+  windowMs: 60_000,
+  max: 60,
+  message: '查询过于频繁，请稍后再试'
+});
+
+// 提交分析：每次都会调用大模型，限制更严
+const submitLimiter = rateLimit({
+  scope: 'submit',
+  windowMs: 600_000,
+  max: 10,
+  message: '提交过于频繁，请十分钟后再试'
+});
+
 /* ------------------------------------ 路由 ----------------------------------- */
 
 /**
@@ -80,7 +144,7 @@ const upload = multer({
  * 保存 answers.json 后立即返回 sessionId，AI 分析在后台异步进行，
  * 前端通过轮询 /api/report/:sessionId 获取结果。
  */
-app.post('/api/submit', upload.single('drawing'), async (req, res) => {
+app.post('/api/submit', submitLimiter, upload.single('drawing'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: '没有收到画作文件' });
@@ -94,6 +158,7 @@ app.post('/api/submit', upload.single('drawing'), async (req, res) => {
 
     const answers = {
       sessionId: req.sessionId,
+      shortCode: allocateShortCode(req.sessionId),
       timestamp: new Date().toISOString(),
       drawingTitle: drawingTitle || '',
       description: description || '',
@@ -110,13 +175,14 @@ app.post('/api/submit', upload.single('drawing'), async (req, res) => {
       'utf-8'
     );
 
-    console.log(`[Server] 会话 ${req.sessionId} 数据已保存`);
+    console.log(`[Server] 会话 ${req.sessionId} 数据已保存（短码 ${answers.shortCode}）`);
 
     // 先响应，让用户看到成功页，分析在后台跑
     res.status(200).json({
       success: true,
       message: '数据已保存，分析报告正在生成中',
-      sessionId: req.sessionId
+      sessionId: req.sessionId,
+      shortCode: answers.shortCode
     });
 
     runAnalysis(req.sessionId, answers, path.join(req.sessionPath, req.file.filename));
@@ -160,10 +226,10 @@ async function runAnalysis(sessionId, answers, imagePath) {
 /**
  * 手动重新生成报告（分析失败时可重试）
  */
-app.post('/api/report/:sessionId/regenerate', async (req, res) => {
-  const { sessionId } = req.params;
-  if (!isValidSessionId(sessionId)) {
-    return res.status(400).json({ error: '会话ID格式不正确' });
+app.post('/api/report/:sessionId/regenerate', reportLimiter, async (req, res) => {
+  const sessionId = resolveToSessionId(req.params.sessionId);
+  if (!sessionId) {
+    return res.status(400).json({ error: '查询码格式不正确' });
   }
 
   const dir = sessionPathOf(sessionId);
@@ -183,11 +249,11 @@ app.post('/api/report/:sessionId/regenerate', async (req, res) => {
  * 获取报告。返回 status 字段供前端轮询：
  *   analyzing / done / failed / pending
  */
-app.get('/api/report/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
+app.get('/api/report/:sessionId', reportLimiter, (req, res) => {
+  const sessionId = resolveToSessionId(req.params.sessionId);
 
-  if (!isValidSessionId(sessionId)) {
-    return res.status(400).json({ error: '会话ID格式不正确，请检查输入' });
+  if (!sessionId) {
+    return res.status(400).json({ error: '查询码格式不正确，请检查输入' });
   }
 
   const dir = sessionPathOf(sessionId);
@@ -201,6 +267,7 @@ app.get('/api/report/:sessionId', (req, res) => {
 
   const result = {
     sessionId,
+    shortCode: null,
     hasAnswers: fs.existsSync(answersPath),
     hasReport: fs.existsSync(reportPath),
     answers: null,
@@ -211,6 +278,7 @@ app.get('/api/report/:sessionId', (req, res) => {
 
   if (result.hasAnswers) {
     result.answers = JSON.parse(fs.readFileSync(answersPath, 'utf-8'));
+    result.shortCode = result.answers.shortCode || null;
   }
   if (result.hasReport) {
     result.report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));

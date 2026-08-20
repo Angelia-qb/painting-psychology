@@ -24,6 +24,8 @@
 ## 功能
 
 - 五步引导流程：介绍 → 绘画准备 → 上传作品 → 表达性探索问卷 → 生成报告
+- **8 位查询码**（如 `K7F2-Q9WM`）代替冗长 ID，方便记录和口头转述
+- **我的报告**：本机自动记录历史报告，无需手动保存查询码
 - 多模态 AI 分析，同时读取画作图像与问卷文本
 - 报告包含：整体回应、3~4 个观察维度、具体可执行的建议、开放式自我觉察问题
 - 危机内容自动识别，触发时优先展示心理援助资源而非做深度解读
@@ -120,11 +122,14 @@ POST /api/submit
 
 ## API
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| `POST` | `/api/submit` | 提交画作与问卷，返回 `sessionId` |
-| `GET` | `/api/report/:sessionId` | 获取报告，含 `status`（`analyzing`/`done`/`failed`） |
-| `POST` | `/api/report/:sessionId/regenerate` | 分析失败时重新生成 |
+| 方法 | 路径 | 说明 | 限流 |
+|---|---|---|---|
+| `POST` | `/api/submit` | 提交画作与问卷，返回 `sessionId` 与 `shortCode` | 10 次 / 10 分钟 |
+| `GET` | `/api/report/:code` | 获取报告，含 `status`（`analyzing`/`done`/`failed`） | 60 次 / 分钟 |
+| `POST` | `/api/report/:code/regenerate` | 分析失败时重新生成 | 60 次 / 分钟 |
+
+`:code` 同时接受 8 位查询码与完整 `sessionId`。查询码不区分大小写，
+连字符可省略（`K7F2-Q9WM` / `k7f2q9wm` / `K7F2 Q9WM` 均可）。
 
 ### report.json 结构
 
@@ -149,7 +154,9 @@ POST /api/submit
 ├── server.js                    Express 服务：上传、分析调度、报告查询
 ├── lib/
 │   ├── analyzer.js              分析引擎，多 provider 适配 + 输出校验
-│   └── prompt.js                系统提示词（表达性艺术治疗原则）
+│   ├── prompt.js                系统提示词（表达性艺术治疗原则）
+│   ├── shortcode.js             8 位查询码生成与规范化
+│   └── rateLimit.js             内存限流，防止查询码被枚举
 ├── src/
 │   ├── App.jsx                  主流程与状态管理
 │   └── components/
@@ -159,8 +166,12 @@ POST /api/submit
 │       ├── GuidedInquiry.jsx    五问表达性探索问卷
 │       ├── Success.jsx          提交成功
 │       ├── ReportViewer.jsx     报告查询与轮询展示
+│       ├── MyReports.jsx        本机报告列表
 │       └── Appendix.jsx         科学附录
-└── data/sessions/<sessionId>/   本地数据（已 gitignore）
+│   └── lib/myReports.js         localStorage 报告记录
+└── data/
+    ├── codes.json               查询码 → sessionId 映射
+    └── sessions/<sessionId>/    本地数据（已 gitignore）
     ├── drawing.png
     ├── answers.json
     ├── report.json
@@ -173,10 +184,13 @@ POST /api/submit
 
 - `data/` 与 `.env` 均已加入 `.gitignore`，不会被提交
 - `sessionId` 使用 `crypto.randomBytes` 生成，无法被枚举猜测
+- 查询码为 8 位随机码（字母表已排除 `0/O`、`1/I/L` 等易混字符），约 5×10¹¹ 种组合，
+  并配合接口限流防止暴力枚举
+- 「我的报告」列表仅存于浏览器 localStorage，不上传服务器
 - 报告查询接口对 sessionId 做格式白名单校验，防止路径穿越
 - 上传限制：仅图片格式，单文件 ≤10MB
 
-**注意：** 当前版本没有用户鉴权，任何人拿到 sessionId 都可以查看对应报告。如需部署到公网，请自行增加访问控制。
+**注意：** 当前版本没有用户鉴权，任何人拿到查询码都可以查看对应报告。如需部署到公网供多人使用，请自行增加访问控制。
 
 ---
 

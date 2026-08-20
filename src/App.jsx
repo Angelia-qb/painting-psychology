@@ -6,6 +6,7 @@ import GuidedInquiry from './components/GuidedInquiry';
 import Success from './components/Success';
 import ReportViewer from './components/ReportViewer';
 import Appendix from './components/Appendix';
+import { saveMyReport } from './lib/myReports';
 import './App.css';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
@@ -24,6 +25,7 @@ export default function App() {
     backgroundContext: ''
   });
   const [sessionId, setSessionId] = useState('');
+  const [shortCode, setShortCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
 
@@ -41,6 +43,7 @@ export default function App() {
       backgroundContext: ''
     });
     setSessionId('');
+    setShortCode('');
     setSubmitError('');
   };
 
@@ -72,6 +75,16 @@ export default function App() {
 
       const data = await response.json();
       setSessionId(data.sessionId);
+      setShortCode(data.shortCode || '');
+
+      // 记到本机，方便之后不用记码也能找回
+      saveMyReport({
+        shortCode: data.shortCode,
+        sessionId: data.sessionId,
+        title: answers.drawingTitle,
+        timestamp: new Date().toISOString()
+      });
+
       setStep(4); // Move to Success screen
     } catch (err) {
       console.error('Submit error:', err);
@@ -173,7 +186,8 @@ export default function App() {
             )}
             {step === 4 && (
               <Success 
-                sessionId={sessionId} 
+                sessionId={sessionId}
+                shortCode={shortCode} 
                 onRestart={handleRestart}
                 onViewReport={() => setActiveTab('report')}
               />
@@ -182,7 +196,7 @@ export default function App() {
         )}
 
         {activeTab === 'report' && (
-          <ReportViewer initialSessionId={sessionId} />
+          <ReportViewer initialSessionId={shortCode || sessionId} />
         )}
 
         {activeTab === 'appendix' && (

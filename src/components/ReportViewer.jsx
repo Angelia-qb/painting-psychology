@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, Loader2, FileText, Calendar, Image, ShieldAlert, Award, HelpCircle, RefreshCw, LifeBuoy } from 'lucide-react';
+import MyReports from './MyReports';
+import { saveMyReport } from '../lib/myReports';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
   ? 'http://localhost:3001'
@@ -29,6 +31,15 @@ export default function ReportViewer({ initialSessionId }) {
       }
       const resData = await response.json();
       setData(resData);
+
+      if (resData.answers) {
+        saveMyReport({
+          shortCode: resData.shortCode,
+          sessionId: resData.sessionId,
+          title: resData.answers.drawingTitle,
+          timestamp: resData.answers.timestamp
+        });
+      }
     } catch (err) {
       console.error(err);
       if (!silent) setError(err.message || '网络连接失败，请确保本地服务器已启动。');
@@ -80,7 +91,7 @@ export default function ReportViewer({ initialSessionId }) {
           <FileText className="icon-blue" size={28} />
         </div>
         <h2>查看您的心理分析报告</h2>
-        <p className="subtitle">输入本地会话 ID (验证码) 即可直接获取分析结果</p>
+        <p className="subtitle">输入查询码即可找回你的分析报告</p>
       </div>
 
       <div className="card-body">
@@ -88,7 +99,7 @@ export default function ReportViewer({ initialSessionId }) {
           <div className="search-input-group">
             <input
               type="text"
-              placeholder="请输入会话ID，例如: session_1786280119292"
+              placeholder="输入 8 位查询码，例如 K7F2-Q9WM"
               value={searchId}
               onChange={(e) => setSearchId(e.target.value)}
               className="search-input"
@@ -100,6 +111,13 @@ export default function ReportViewer({ initialSessionId }) {
             </button>
           </div>
         </form>
+
+        <MyReports
+          onOpen={(code) => {
+            setSearchId(code);
+            fetchReport(code);
+          }}
+        />
 
         {error && (
           <div className="error-banner margin-top-sm">
@@ -120,6 +138,12 @@ export default function ReportViewer({ initialSessionId }) {
                 <FileText size={14} />
                 <span>作品名称：《{data.answers.drawingTitle || '未命名'}》</span>
               </div>
+              {data.shortCode && (
+                <div className="meta-item">
+                  <FileText size={14} />
+                  <span>查询码：<code>{data.shortCode}</code></span>
+                </div>
+              )}
             </div>
 
             {/* Drawing Preview & Original Questionnaire Answers */}
@@ -193,7 +217,7 @@ export default function ReportViewer({ initialSessionId }) {
                       <p>
                         分析通常需要 20~60 秒，页面会自动刷新，不用手动操作。
                         <br />
-                        如果你想先离开，记下会话ID <code>{data.sessionId}</code>，随时回来查看。
+                        如果你想先离开，记下查询码 <code>{data.shortCode || data.sessionId}</code>，随时回来查看。
                       </p>
                     </div>
                   </div>
