@@ -447,6 +447,8 @@ app.get('/api/my-reports', auth.requireAuth, reportLimiter, (req, res) => {
     }
 
     if (!wantAll && a.ownerId !== req.user.sub) continue;
+    // 见 DATA_PROTECTION.md：测试数据用标记隐藏，绝不删除
+    if (a.isTestData && !wantAll) continue;
 
     const reportPath = path.join(SESSIONS_DIR, id, 'report.json');
     items.push({
@@ -491,6 +493,9 @@ app.get('/api/admin/users', auth.requireAdmin, (req, res) => {
 /**
  * 画作图片：必须登录，且只能取自己的（管理员除外）。
  * 不能用 express.static 直接挂，否则任何人拿到路径就能看到别人的画。
+ *
+ * 注意：res.sendFile 必须传 root 选项。数据目录在应用目录之外，
+ * 直接传绝对路径会被 Express 5 以 "Not Found" 拒绝。
  */
 app.get('/data/sessions/:sessionId/:file', auth.requireAuth, (req, res) => {
   const { sessionId, file } = req.params;
@@ -507,7 +512,12 @@ app.get('/data/sessions/:sessionId/:file', auth.requireAuth, (req, res) => {
   const isOwner = answers.ownerId && answers.ownerId === req.user.sub;
   if (!isAdmin && !isOwner) return res.status(404).json({ error: 'Not found' });
 
-  return res.sendFile(path.join(SESSIONS_DIR, sessionId, file));
+  return res.sendFile(path.join(sessionId, file), { root: SESSIONS_DIR }, (err) => {
+    if (err && !res.headersSent) {
+      console.error('[Server] 图片发送失败:', err.message);
+      res.status(404).json({ error: 'Not found' });
+    }
+  });
 });
 
 const DIST_DIR = path.join(__dirname, 'dist');
