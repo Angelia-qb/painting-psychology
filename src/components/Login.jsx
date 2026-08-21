@@ -1,12 +1,16 @@
 import React, { useState } from 'react';
-import { LogIn, UserPlus, Loader2, ShieldAlert, Crown } from 'lucide-react';
+import { LogIn, UserPlus, Loader2, ShieldAlert, Crown, Ticket } from 'lucide-react';
 
-export default function Login({ apiBase, needsSetup, onLoggedIn }) {
+export default function Login({ apiBase, needsSetup, requireInvite, onLoggedIn }) {
   const [mode, setMode] = useState(needsSetup ? 'register' : 'login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // 首个账号（部署者）不需要邀请码
+  const needInviteField = mode === 'register' && requireInvite && !needsSetup;
 
   const submit = async (e) => {
     e.preventDefault();
@@ -18,7 +22,7 @@ export default function Login({ apiBase, needsSetup, onLoggedIn }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username, password, inviteCode })
       });
 
       const data = await res.json();
@@ -42,7 +46,9 @@ export default function Login({ apiBase, needsSetup, onLoggedIn }) {
         <p className="subtitle">
           {needsSetup
             ? '这是首个账号，将自动成为管理员'
-            : '你的画作与报告只有你自己能看到'}
+            : mode === 'register' && requireInvite
+              ? '目前为邀请制注册'
+              : '你的画作与报告只有你自己能看到'}
         </p>
       </div>
 
@@ -70,6 +76,24 @@ export default function Login({ apiBase, needsSetup, onLoggedIn }) {
               disabled={busy}
             />
           </div>
+
+          {needInviteField && (
+            <div className="form-group">
+              <label className="form-label" htmlFor="invite">
+                <Ticket size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />
+                邀请码
+              </label>
+              <p className="field-desc">目前为邀请制，请向邀请你的人索取</p>
+              <input
+                id="invite"
+                className="form-input invite-input"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
+                placeholder="例如 K7F-Q9W"
+                disabled={busy}
+              />
+            </div>
+          )}
 
           <div className="form-group">
             <label className="form-label" htmlFor="password">密码</label>

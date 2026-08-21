@@ -41,6 +41,9 @@ Motta et al. (1993) 等研究已证实这类解读无效；提供给模型只会
 
 ## 账号与权限
 
+- **邀请制注册**：除首个管理员账号外，注册需要邀请码
+- **每日配额**：每人每天 10 次分析（管理员不受限），防止 API 额度被耗尽
+- **存储上限**：每人 100MB
 - 必须注册/登录才能提交画作或查看报告
 - **每个用户只能看到自己的报告**，用别人的查询码查询会返回"不存在"
 - **首个注册的账号自动成为管理员**，可查看全部用户的报告
@@ -202,6 +205,10 @@ POST /api/submit
 | `POST` | `/api/report/:code/regenerate` | 本人/管理员 | 重新生成 | 60 次 / 分钟 |
 | `GET` | `/api/my-reports` | 登录 | 我的报告列表；管理员加 `?all=1` 看全部 | 60 次 / 分钟 |
 | `GET` | `/api/admin/users` | 管理员 | 用户列表与报告数 | — |
+| `GET` | `/api/admin/invites` | 管理员 | 邀请码列表 | — |
+| `POST` | `/api/admin/invites` | 管理员 | 生成邀请码 | — |
+| `POST` | `/api/admin/invites/:code/revoke` | 管理员 | 停用邀请码 | — |
+| `GET` | `/api/admin/usage` | 管理员 | 各用户用量统计 | — |
 | `GET` | `/data/sessions/:id/drawing.png` | 本人/管理员 | 画作图片 | — |
 
 `:code` 同时接受 8 位查询码与完整 `sessionId`。查询码不区分大小写，
@@ -235,6 +242,8 @@ POST /api/submit
 │   ├── shortcode.js             8 位查询码生成与规范化
 │   ├── rateLimit.js             内存限流，防止查询码被枚举
 │   ├── users.js                 用户存储（scrypt 密码哈希）
+│   ├── invites.js               邀请码生成与校验
+│   ├── usage.js                 每日配额与存储用量
 │   └── auth.js                  HMAC 签名会话令牌与权限中间件
 ├── src/
 │   ├── App.jsx                  主流程与状态管理
@@ -245,7 +254,8 @@ POST /api/submit
 │       ├── GuidedInquiry.jsx    五问表达性探索问卷
 │       ├── Success.jsx          提交成功
 │       ├── ReportViewer.jsx     报告查询与轮询展示
-│       ├── Login.jsx            登录与注册
+│       ├── Login.jsx            登录与注册（含邀请码）
+│       ├── AdminPanel.jsx       管理后台：邀请码与用量
 │       ├── MyReports.jsx        报告列表（含管理员视图）
 │       └── Appendix.jsx         科学附录
 └── data/

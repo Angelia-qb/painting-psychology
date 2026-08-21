@@ -7,6 +7,7 @@ import Success from './components/Success';
 import ReportViewer from './components/ReportViewer';
 import Appendix from './components/Appendix';
 import Login from './components/Login';
+import AdminPanel from './components/AdminPanel';
 import './App.css';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
@@ -31,6 +32,8 @@ export default function App() {
 
   const [user, setUser] = useState(null);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [requireInvite, setRequireInvite] = useState(true);
+  const [quota, setQuota] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
@@ -39,6 +42,8 @@ export default function App() {
       .then((d) => {
         setUser(d.user || null);
         setNeedsSetup(Boolean(d.needsSetup));
+        setRequireInvite(d.requireInvite !== false);
+        setQuota(d.quota || null);
       })
       .catch(() => setUser(null))
       .finally(() => setAuthLoading(false));
@@ -99,6 +104,7 @@ export default function App() {
       const data = await response.json();
       setSessionId(data.sessionId);
       setShortCode(data.shortCode || '');
+      if (data.quota) setQuota((q) => ({ ...q, ...data.quota }));
 
       setStep(4); // Move to Success screen
     } catch (err) {
@@ -144,9 +150,14 @@ export default function App() {
           <Login
             apiBase={API_BASE}
             needsSetup={needsSetup}
+            requireInvite={requireInvite}
             onLoggedIn={(u) => {
               setUser(u);
               setNeedsSetup(false);
+              fetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
+                .then((r) => r.json())
+                .then((d) => setQuota(d.quota || null))
+                .catch(() => {});
             }}
           />
         </main>
@@ -189,9 +200,22 @@ export default function App() {
           >
             科学附录
           </button>
+          {user.role === 'admin' && (
+            <button
+              className={`nav-btn ${activeTab === 'admin' ? 'active' : ''}`}
+              onClick={() => setActiveTab('admin')}
+            >
+              管理
+            </button>
+          )}
         </nav>
 
         <div className="user-chip">
+          {quota && user.role !== 'admin' && (
+            <span className="quota-chip" title="每日分析次数">
+              今日 {quota.remainingToday}/{quota.dailyLimit}
+            </span>
+          )}
           <span className="user-name">
             {user.role === 'admin' && <span className="admin-badge">管理员</span>}
             {user.username}
@@ -264,6 +288,10 @@ export default function App() {
 
         {activeTab === 'appendix' && (
           <Appendix />
+        )}
+
+        {activeTab === 'admin' && user.role === 'admin' && (
+          <AdminPanel apiBase={API_BASE} />
         )}
       </main>
 

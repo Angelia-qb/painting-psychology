@@ -11,6 +11,8 @@ import { newShortCode, normalizeShortCode } from './lib/shortcode.js';
 import { rateLimit } from './lib/rateLimit.js';
 import { createUserStore } from './lib/users.js';
 import { createAuth, COOKIE_NAME, cookieOptions } from './lib/auth.js';
+import { createInviteStore } from './lib/invites.js';
+import { createUsageStore } from './lib/usage.js';
 import cookieParser from 'cookie-parser';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,6 +70,14 @@ const CODES_FILE = path.join(DATA_DIR, 'codes.json');
 /* ------------------------------- 用户与鉴权初始化 ------------------------------ */
 
 const users = createUserStore(DATA_DIR);
+const invites = createInviteStore(DATA_DIR);
+const usage = createUsageStore(DATA_DIR, {
+  dailyAnalyses: Number(process.env.DAILY_ANALYSIS_LIMIT || 10),
+  maxStorageBytes: Number(process.env.MAX_STORAGE_MB || 100) * 1024 * 1024
+});
+
+// 是否需要邀请码才能注册（首个管理员账号除外）
+const REQUIRE_INVITE = String(process.env.REQUIRE_INVITE ?? 'true') !== 'false';
 
 // 会话密钥：优先读环境变量，否则生成并持久化，避免重启后所有人被登出
 const SECRET_FILE = path.join(DATA_DIR, '.session-secret');
@@ -173,15 +183,30 @@ const authLimiter = rateLimit({
  * 首个注册的账号自动成为管理员（超级管理员由部署者先注册）。
  */
 app.post('/api/auth/register', authLimiter, (req, res) => {
-  const { username, password } = req.body || {};
+  const { username, password, inviteCode } = req.body || {};
+
+  const isFirst = users.count() === 0;
+
+  // 首个账号是部署者本人，不需要邀请码；之后一律需要
+  let invite = null;
+  if (!isFirst && REQUIRE_INVITE) {
+    const result = invites.check(inviteCode);
+    if (!result.ok) {
+      return res.status(403).json({ error: result.reason, needInvite: true });
+    }
+    invite = result.code;
+  }
 
   try {
-    const isFirst = users.count() === 0;
     const user = users.create({
       username,
       password,
       role: isFirst ? 'admin' : 'user'
     });
+
+    if (invite) {
+      invites.consume(invite, { userId: user.id, username: user.username });
+    }
 
     const token = auth.issueToken(user);
     res.cookie(COOKIE_NAME, token, cookieOptions(req));
@@ -211,13 +236,21 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => {
-  if (!req.user) return res.json({ user: null, needsSetup: users.count() === 0 });
+  if (!req.user) {
+    return res.json({
+      user: null,
+      needsSetup: users.count() === 0,
+      requireInvite: REQUIRE_INVITE
+    });
+  }
   return res.json({
     user: {
       id: req.user.sub,
       username: req.user.username,
       role: req.user.role
-    }
+    },
+    quota: usage.get(req.user.sub),
+    requireInvite: REQUIRE_INVITE
   });
 });
 
@@ -247,7 +280,29 @@ const submitLimiter = rateLimit({
  * 保存 answers.json 后立即返回 sessionId，AI 分析在后台异步进行，
  * 前端通过轮询 /api/report/:sessionId 获取结果。
  */
-app.post('/api/submit', auth.requireAuth, submitLimiter, upload.single('drawing'), async (req, res) => {
+/**
+ * 配额预检：在 multer 落盘之前拦截，避免超额请求仍然写入文件。
+ */
+function checkQuota(req, res, next) {
+  const incoming = Number(req.headers['content-length'] || 0);
+  const verdict = usage.canAnalyze(req.user.sub, {
+    isAdmin: req.user.role === 'admin',
+    incomingBytes: incoming
+  });
+
+  if (!verdict.ok) {
+    return res.status(429).json({ error: verdict.message, code: verdict.code });
+  }
+  next();
+}
+
+app.post(
+  '/api/submit',
+  auth.requireAuth,
+  submitLimiter,
+  checkQuota,
+  upload.single('drawing'),
+  async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: '没有收到画作文件' });
@@ -280,14 +335,20 @@ app.post('/api/submit', auth.requireAuth, submitLimiter, upload.single('drawing'
       'utf-8'
     );
 
-    console.log(`[Server] 会话 ${req.sessionId} 数据已保存（短码 ${answers.shortCode}）`);
+    const quota = usage.record(req.user.sub, req.file.size || 0);
+
+    console.log(
+      `[Server] 会话 ${req.sessionId} 数据已保存（短码 ${answers.shortCode}，` +
+        `${req.user.username} 今日 ${quota.usedToday}/${quota.dailyLimit}）`
+    );
 
     // 先响应，让用户看到成功页，分析在后台跑
     res.status(200).json({
       success: true,
       message: '数据已保存，分析报告正在生成中',
       sessionId: req.sessionId,
-      shortCode: answers.shortCode
+      shortCode: answers.shortCode,
+      quota: { usedToday: quota.usedToday, remainingToday: quota.remainingToday, dailyLimit: quota.dailyLimit }
     });
 
     runAnalysis(req.sessionId, answers, path.join(req.sessionPath, req.file.filename));
@@ -297,7 +358,8 @@ app.post('/api/submit', auth.requireAuth, submitLimiter, upload.single('drawing'
       res.status(500).json({ error: '服务器内部错误' });
     }
   }
-});
+  }
+);
 
 /**
  * 后台执行分析，结果写入 report.json；失败则写 error.json 供前端展示
@@ -467,6 +529,43 @@ app.get('/api/my-reports', auth.requireAuth, reportLimiter, (req, res) => {
 });
 
 /* ------------------------------- 管理员接口 -------------------------------- */
+
+
+/* --------------------------- 管理员：邀请码与用量 --------------------------- */
+
+app.get('/api/admin/invites', auth.requireAdmin, (req, res) => {
+  return res.json({ invites: invites.list(), requireInvite: REQUIRE_INVITE });
+});
+
+app.post('/api/admin/invites', auth.requireAdmin, (req, res) => {
+  const { note, maxUses, expiresInDays } = req.body || {};
+  const inv = invites.create({
+    note: String(note || '').slice(0, 100),
+    maxUses,
+    expiresInDays,
+    createdBy: req.user.username
+  });
+  return res.status(201).json({ invite: inv });
+});
+
+app.post('/api/admin/invites/:code/revoke', auth.requireAdmin, (req, res) => {
+  const ok = invites.revoke(req.params.code);
+  return ok ? res.json({ success: true }) : res.status(404).json({ error: '邀请码不存在' });
+});
+
+app.post('/api/admin/invites/:code/restore', auth.requireAdmin, (req, res) => {
+  const ok = invites.restore(req.params.code);
+  return ok ? res.json({ success: true }) : res.status(404).json({ error: '邀请码不存在' });
+});
+
+app.get('/api/admin/usage', auth.requireAdmin, (req, res) => {
+  const byUser = Object.fromEntries(usage.all().map((u) => [u.userId, u]));
+  const list = users.list().map((u) => ({
+    ...u,
+    usage: byUser[u.id] || { usedToday: 0, totalAnalyses: 0, storageBytes: 0, lastAt: null }
+  }));
+  return res.json({ users: list, limits: usage.limits });
+});
 
 app.get('/api/admin/users', auth.requireAdmin, (req, res) => {
   const list = users.list();
