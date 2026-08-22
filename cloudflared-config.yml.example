@@ -1,0 +1,10 @@
+tunnel: <YOUR-TUNNEL-ID>
+credentials-file: <HOME>/.cloudflared/<YOUR-TUNNEL-ID>.json
+
+ingress:
+  - hostname: <YOUR-DOMAIN>
+    service: http://localhost:8080
+  - hostname: <YOUR-DOMAIN>
+    service: http://localhost:8080
+  # 兜底：未匹配的请求一律拒绝
+  - service: http_status:404

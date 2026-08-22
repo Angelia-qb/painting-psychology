@@ -138,6 +138,21 @@ npm run build
 node server.js     # 单端口同时提供前端与 API
 ```
 
+### 固定域名（Cloudflare 具名隧道）
+
+本项目部署在无公网 IP 的机器上，通过 Cloudflare Tunnel 出站连接暴露服务。
+
+```bash
+./cloudflared tunnel login                      # 浏览器授权（注意：勿频繁重试，会触发 429 限流）
+./cloudflared tunnel create mindart             # 创建隧道
+./cloudflared tunnel route dns mindart <域名>    # 绑定 DNS
+```
+
+然后按 `cloudflared-config.yml.example` 写 `~/.cloudflared/config.yml`，
+用 `mindart-tunnel.service.example` 安装 systemd 服务。
+
+优点：无需公网 IP、无需开放防火墙端口、自动 HTTPS、地址固定。
+
 ### 常驻运行（systemd 用户服务）
 
 ```bash

@@ -1,0 +1,15 @@
+[Unit]
+Description=MindArt Cloudflare Named Tunnel (www.hanlindong.online)
+After=network.target mindart.service
+Requires=mindart.service
+
+[Service]
+Type=simple
+ExecStart=/home/angelia_58/.openclaw/workspace/apps/painting-psychology/cloudflared --config /home/angelia_58/.cloudflared/config.yml tunnel run
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/angelia_58/.openclaw/workspace/apps/painting-psychology/tunnel.log
+StandardError=append:/home/angelia_58/.openclaw/workspace/apps/painting-psychology/tunnel.log
+
+[Install]
+WantedBy=default.target

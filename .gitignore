@@ -31,3 +31,6 @@ server.log
 tunnel.log
 yarn-debug.log*
 yarn-error.log*
+
+# Cloudflare 隧道凭证
+*.json.cf
