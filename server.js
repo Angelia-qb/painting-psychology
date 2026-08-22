@@ -612,14 +612,14 @@ app.get('/api/report/:sessionId/share', auth.requireAuth, reportLimiter, loadOwn
   }
 
   try {
-    const quote = await generateShareQuote({
+    const { quote, question } = await generateShareQuote({
       drawingTitle: req.sessionAnswers.drawingTitle,
       report
     });
 
     const payload = {
       quote,
-      question: report.questions?.[0] || '',
+      question: question || '',
       drawingTitle: req.sessionAnswers.drawingTitle || '',
       generatedAt: new Date().toISOString()
     };
