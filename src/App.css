@@ -1694,3 +1694,199 @@ h2, h1 {
   color: var(--text-muted);
   flex-shrink: 0;
 }
+
+/* ============ 账户 / 分享 ============ */
+
+.acct-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1.75rem;
+}
+
+.acct-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 1.1rem 0.6rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  text-align: center;
+}
+
+.acct-box.highlight {
+  background: rgba(212, 160, 23, 0.08);
+  border-color: rgba(212, 160, 23, 0.25);
+}
+
+.acct-num {
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+.acct-box.highlight .acct-num {
+  color: #d4a017;
+}
+
+.acct-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.acct-sub {
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.acct-section {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  margin: 1.75rem 0 0.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.acct-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 0.9rem;
+}
+
+.buy-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.buy-row .form-input {
+  flex: 1;
+}
+
+.ledger-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ledger-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.8rem;
+  padding: 0.5rem 0.8rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 9px;
+}
+
+.ledger-plus {
+  color: #4ade80;
+  font-weight: 700;
+  min-width: 34px;
+}
+
+.ledger-minus {
+  color: var(--text-muted);
+  font-weight: 700;
+  min-width: 34px;
+}
+
+.ledger-reason {
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+.ledger-date {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.share-btn {
+  margin-top: 1.5rem;
+}
+
+.share-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+
+.share-modal {
+  position: relative;
+  background: #171b26;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 1.75rem;
+  max-width: 420px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.share-modal h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.share-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.3rem;
+}
+
+.share-privacy {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 1rem;
+}
+
+.share-opt {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.1rem;
+  cursor: pointer;
+}
+
+.share-preview {
+  width: 100%;
+  border-radius: 12px;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.share-tip {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 0.6rem;
+}
+
+@media (max-width: 600px) {
+  .acct-grid {
+    grid-template-columns: 1fr;
+  }
+}

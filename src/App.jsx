@@ -8,6 +8,7 @@ import ReportViewer from './components/ReportViewer';
 import Appendix from './components/Appendix';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
+import MyAccount from './components/MyAccount';
 import './App.css';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
@@ -43,7 +44,7 @@ export default function App() {
         setUser(d.user || null);
         setNeedsSetup(Boolean(d.needsSetup));
         setRequireInvite(d.requireInvite !== false);
-        setQuota(d.quota || null);
+        setQuota(d.quota ? { ...d.quota, credits: d.credits || 0 } : null);
       })
       .catch(() => setUser(null))
       .finally(() => setAuthLoading(false));
@@ -200,6 +201,12 @@ export default function App() {
           >
             科学附录
           </button>
+          <button
+            className={`nav-btn ${activeTab === 'account' ? 'active' : ''}`}
+            onClick={() => setActiveTab('account')}
+          >
+            我的账户
+          </button>
           {user.role === 'admin' && (
             <button
               className={`nav-btn ${activeTab === 'admin' ? 'active' : ''}`}
@@ -212,8 +219,9 @@ export default function App() {
 
         <div className="user-chip">
           {quota && user.role !== 'admin' && (
-            <span className="quota-chip" title="每日分析次数">
+            <span className="quota-chip" title="今日免费次数 / 次数包">
               今日 {quota.remainingToday}/{quota.dailyLimit}
+              {quota.credits > 0 && ` · 包 ${quota.credits}`}
             </span>
           )}
           <span className="user-name">
@@ -289,6 +297,8 @@ export default function App() {
         {activeTab === 'appendix' && (
           <Appendix />
         )}
+
+        {activeTab === 'account' && <MyAccount apiBase={API_BASE} />}
 
         {activeTab === 'admin' && user.role === 'admin' && (
           <AdminPanel apiBase={API_BASE} />

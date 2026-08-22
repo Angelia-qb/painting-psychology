@@ -42,7 +42,9 @@ Motta et al. (1993) 等研究已证实这类解读无效；提供给模型只会
 ## 账号与权限
 
 - **邀请制注册**：除首个管理员账号外，注册需要邀请码
-- **每日配额**：每人每天 10 次分析（管理员不受限），防止 API 额度被耗尽
+- **每日配额**：每人每天 3 次免费分析（管理员不受限）
+- **次数包**：免费次数用完后消耗次数包，6 元/次
+- **邀请奖励**：每人每天可领 3 个邀请码，每成功邀请 1 人 +5 次
 - **存储上限**：每人 100MB
 - 必须注册/登录才能提交画作或查看报告
 - **每个用户只能看到自己的报告**，用别人的查询码查询会返回"不存在"
@@ -224,6 +226,14 @@ POST /api/submit
 | `POST` | `/api/admin/invites` | 管理员 | 生成邀请码 | — |
 | `POST` | `/api/admin/invites/:code/revoke` | 管理员 | 停用邀请码 | — |
 | `GET` | `/api/admin/usage` | 管理员 | 各用户用量统计 | — |
+| `GET` | `/api/me/account` | 登录 | 余额、流水、邀请码、邀请战绩 | — |
+| `POST` | `/api/orders` | 登录 | 下单购买次数 | — |
+| `POST` | `/api/admin/orders/:id/confirm` | 管理员 | 确认订单并发放次数 | — |
+| `POST` | `/api/admin/grant` | 管理员 | 直接赠送次数 | — |
+
+> ⚠️ **支付网关尚未接入。** 微信支付/支付宝需要企业主体、商户号与备案域名，
+> 须由运营方自行申请。当前 `PAYMENT_PROVIDER=mock`，订单需管理员手动确认。
+> 拿到商户号后填入 `.env` 即可切换。
 | `GET` | `/data/sessions/:id/drawing.png` | 本人/管理员 | 画作图片 | — |
 
 `:code` 同时接受 8 位查询码与完整 `sessionId`。查询码不区分大小写，
@@ -259,6 +269,8 @@ POST /api/submit
 │   ├── users.js                 用户存储（scrypt 密码哈希）
 │   ├── invites.js               邀请码生成与校验
 │   ├── usage.js                 每日配额与存储用量
+│   ├── credits.js               次数包（全流水记账）
+│   ├── orders.js                订单与支付（网关可插拔）
 │   └── auth.js                  HMAC 签名会话令牌与权限中间件
 ├── src/
 │   ├── App.jsx                  主流程与状态管理
@@ -271,6 +283,8 @@ POST /api/submit
 │       ├── ReportViewer.jsx     报告查询与轮询展示
 │       ├── Login.jsx            登录与注册（含邀请码）
 │       ├── AdminPanel.jsx       管理后台：邀请码与用量
+│       ├── MyAccount.jsx        我的账户：次数、邀请、购买
+│       ├── ShareCard.jsx        分享卡片（canvas 生成，不含隐私）
 │       ├── MyReports.jsx        报告列表（含管理员视图）
 │       └── Appendix.jsx         科学附录
 └── data/

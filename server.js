@@ -13,6 +13,8 @@ import { createUserStore } from './lib/users.js';
 import { createAuth, COOKIE_NAME, cookieOptions } from './lib/auth.js';
 import { createInviteStore } from './lib/invites.js';
 import { createUsageStore } from './lib/usage.js';
+import { createCreditStore } from './lib/credits.js';
+import { createOrderStore, PRICE_PER_ANALYSIS_FEN } from './lib/orders.js';
 import cookieParser from 'cookie-parser';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -72,9 +74,16 @@ const CODES_FILE = path.join(DATA_DIR, 'codes.json');
 const users = createUserStore(DATA_DIR);
 const invites = createInviteStore(DATA_DIR);
 const usage = createUsageStore(DATA_DIR, {
-  dailyAnalyses: Number(process.env.DAILY_ANALYSIS_LIMIT || 10),
+  dailyAnalyses: Number(process.env.DAILY_ANALYSIS_LIMIT || 3),
   maxStorageBytes: Number(process.env.MAX_STORAGE_MB || 100) * 1024 * 1024
 });
+const credits = createCreditStore(DATA_DIR);
+const orders = createOrderStore(DATA_DIR);
+
+// 邀请奖励：每成功邀请 1 人，奖励多少次分析
+const INVITE_REWARD = Number(process.env.INVITE_REWARD || 5);
+// 每人每天可领取的邀请码数量
+const DAILY_INVITE_CODES = Number(process.env.DAILY_INVITE_CODES || 3);
 
 // 是否需要邀请码才能注册（首个管理员账号除外）
 const REQUIRE_INVITE = String(process.env.REQUIRE_INVITE ?? 'true') !== 'false';
@@ -206,6 +215,17 @@ app.post('/api/auth/register', authLimiter, (req, res) => {
 
     if (invite) {
       invites.consume(invite, { userId: user.id, username: user.username });
+
+      // 邀请奖励发给码的持有者（管理员发的通用码没有持有者，不发奖励）
+      const inviterId = invites.ownerOf(invite);
+      if (inviterId && inviterId !== user.id) {
+        credits.add(inviterId, INVITE_REWARD, 'invite_reward', {
+          inviteCode: invite,
+          inviteeId: user.id,
+          inviteeName: user.username
+        });
+        console.log(`[Server] 邀请奖励：${inviterId} +${INVITE_REWARD} 次（邀请 ${user.username}）`);
+      }
     }
 
     const token = auth.issueToken(user);
@@ -250,6 +270,7 @@ app.get('/api/auth/me', (req, res) => {
       role: req.user.role
     },
     quota: usage.get(req.user.sub),
+    credits: credits.balance(req.user.sub),
     requireInvite: REQUIRE_INVITE
   });
 });
@@ -285,15 +306,34 @@ const submitLimiter = rateLimit({
  */
 function checkQuota(req, res, next) {
   const incoming = Number(req.headers['content-length'] || 0);
-  const verdict = usage.canAnalyze(req.user.sub, {
-    isAdmin: req.user.role === 'admin',
-    incomingBytes: incoming
-  });
+  const isAdmin = req.user.role === 'admin';
 
-  if (!verdict.ok) {
+  const verdict = usage.canAnalyze(req.user.sub, { isAdmin, incomingBytes: incoming });
+
+  if (verdict.ok) {
+    req.useCredit = false;
+    return next();
+  }
+
+  // 存储超限无法用积分抵扣
+  if (verdict.code === 'STORAGE_LIMIT') {
     return res.status(429).json({ error: verdict.message, code: verdict.code });
   }
-  next();
+
+  // 免费次数用完 → 尝试用积分
+  const balance = credits.balance(req.user.sub);
+  if (balance >= 1) {
+    req.useCredit = true;
+    return next();
+  }
+
+  return res.status(402).json({
+    error: '今日免费次数已用完',
+    code: 'NEED_CREDIT',
+    balance: 0,
+    pricePerAnalysisFen: PRICE_PER_ANALYSIS_FEN,
+    hint: '可以购买次数，或邀请朋友获得免费次数'
+  });
 }
 
 app.post(
@@ -335,7 +375,16 @@ app.post(
       'utf-8'
     );
 
-    const quota = usage.record(req.user.sub, req.file.size || 0);
+    let creditBalance = credits.balance(req.user.sub);
+    if (req.useCredit) {
+      credits.spendOne(req.user.sub, { sessionId: req.sessionId });
+      creditBalance -= 1;
+      // 积分消费也计入存储用量，但不占当日免费次数
+      usage.recordStorageOnly(req.user.sub, req.file.size || 0);
+    }
+    const quota = req.useCredit
+      ? usage.get(req.user.sub)
+      : usage.record(req.user.sub, req.file.size || 0);
 
     console.log(
       `[Server] 会话 ${req.sessionId} 数据已保存（短码 ${answers.shortCode}，` +
@@ -348,7 +397,13 @@ app.post(
       message: '数据已保存，分析报告正在生成中',
       sessionId: req.sessionId,
       shortCode: answers.shortCode,
-      quota: { usedToday: quota.usedToday, remainingToday: quota.remainingToday, dailyLimit: quota.dailyLimit }
+      quota: {
+        usedToday: quota.usedToday,
+        remainingToday: quota.remainingToday,
+        dailyLimit: quota.dailyLimit,
+        credits: creditBalance,
+        usedCredit: Boolean(req.useCredit)
+      }
     });
 
     runAnalysis(req.sessionId, answers, path.join(req.sessionPath, req.file.filename));
@@ -530,6 +585,87 @@ app.get('/api/my-reports', auth.requireAuth, reportLimiter, (req, res) => {
 
 /* ------------------------------- 管理员接口 -------------------------------- */
 
+
+
+/* ------------------------------ 积分 / 邀请 / 订单 ----------------------------- */
+
+/** 我的账户：余额、流水、每日邀请码、邀请战绩 */
+app.get('/api/me/account', auth.requireAuth, (req, res) => {
+  const uid = req.user.sub;
+  const codes = invites.dailyCodesFor(uid, req.user.username, DAILY_INVITE_CODES);
+
+  return res.json({
+    quota: usage.get(uid),
+    credits: credits.balance(uid),
+    ledger: credits.ledger(uid, 20),
+    inviteCodes: codes.map((c) => ({
+      code: c.code,
+      used: c.usedCount > 0,
+      usedBy: c.usedBy[0]?.username || null
+    })),
+    inviteStats: invites.inviteStats(uid),
+    inviteReward: INVITE_REWARD,
+    pricePerAnalysisFen: PRICE_PER_ANALYSIS_FEN,
+    shareUrl: process.env.PUBLIC_URL || ''
+  });
+});
+
+/** 下单购买次数 */
+app.post('/api/orders', auth.requireAuth, (req, res) => {
+  const order = orders.create({
+    userId: req.user.sub,
+    username: req.user.username,
+    quantity: req.body?.quantity
+  });
+
+  // 支付网关尚未接入：mock 模式下返回一个待确认订单，
+  // 生产环境应在此处调起微信/支付宝下单接口并返回支付参数
+  return res.status(201).json({
+    order,
+    payment: {
+      provider: order.provider,
+      ready: order.provider !== 'mock',
+      message:
+        order.provider === 'mock'
+          ? '支付网关尚未接入，请联系管理员手动确认订单'
+          : undefined
+    }
+  });
+});
+
+app.get('/api/orders', auth.requireAuth, (req, res) => {
+  return res.json({ orders: orders.listByUser(req.user.sub) });
+});
+
+/** 管理员手动确认订单（支付网关接入前的过渡方案） */
+app.post('/api/admin/orders/:id/confirm', auth.requireAdmin, (req, res) => {
+  const order = orders.markPaid(req.params.id, { confirmedBy: req.user.username });
+  if (!order) return res.status(404).json({ error: '订单不存在' });
+  if (order.alreadyPaid) return res.json({ order, message: '该订单已确认过，未重复发放' });
+
+  const balance = credits.add(order.userId, order.quantity, 'purchase', {
+    orderId: order.id,
+    totalFen: order.totalFen
+  });
+
+  console.log(`[Server] 订单 ${order.id} 已确认，${order.username} +${order.quantity} 次`);
+  return res.json({ order, balance });
+});
+
+app.get('/api/admin/orders', auth.requireAdmin, (req, res) => {
+  return res.json({ orders: orders.all() });
+});
+
+/** 管理员直接赠送次数 */
+app.post('/api/admin/grant', auth.requireAdmin, (req, res) => {
+  const { userId, amount, note } = req.body || {};
+  const n = Number(amount);
+  if (!userId || !Number.isFinite(n) || n === 0) {
+    return res.status(400).json({ error: '参数不正确' });
+  }
+  const balance = credits.add(userId, n, 'admin_grant', { note: note || '', by: req.user.username });
+  return res.json({ balance });
+});
 
 /* --------------------------- 管理员：邀请码与用量 --------------------------- */
 

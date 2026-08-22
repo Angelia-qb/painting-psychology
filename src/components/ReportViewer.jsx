@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Loader2, FileText, Calendar, Image, ShieldAlert, Award, HelpCircle, RefreshCw, LifeBuoy } from 'lucide-react';
+import { Search, Loader2, FileText, Calendar, Image, ShieldAlert, Award, HelpCircle, RefreshCw, LifeBuoy, Share2 } from 'lucide-react';
 import MyReports from './MyReports';
+import ShareCard from './ShareCard';
 
 const API_BASE = typeof window !== 'undefined' && window.location.hostname === 'localhost' && window.location.port === '5173'
   ? 'http://localhost:3001'
@@ -12,6 +13,7 @@ export default function ReportViewer({ initialSessionId, user }) {
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
   const [retrying, setRetrying] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const pollTimer = useRef(null);
 
   const fetchReport = useCallback(async (sid, { silent = false } = {}) => {
@@ -289,6 +291,10 @@ export default function ReportViewer({ initialSessionId, user }) {
                     </div>
                   )}
 
+                  <button className="btn btn-primary btn-full share-btn" onClick={() => setSharing(true)}>
+                    <Share2 size={16} /> 生成分享卡片
+                  </button>
+
                   <div className="report-scientific-footer">
                     <p>本报告基于表达性艺术治疗原理生成。关于科学局限性及理论基础，可查看“科学附录”页面。</p>
                   </div>
@@ -298,6 +304,15 @@ export default function ReportViewer({ initialSessionId, user }) {
           </div>
         )}
       </div>
+
+      {sharing && data?.report && (
+        <ShareCard
+          report={data.report}
+          drawingUrl={`${API_BASE}/${data.answers.relativeImagePath}`}
+          siteUrl={window.location.origin}
+          onClose={() => setSharing(false)}
+        />
+      )}
     </div>
   );
 }
