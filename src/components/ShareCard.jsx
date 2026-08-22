@@ -1,72 +1,117 @@
-import React, { useState, useRef } from 'react';
-import { Share2, Download, Loader2, X } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Download, Loader2, X, RefreshCw } from 'lucide-react';
 
 /**
  * 分享卡片
  *
- * 设计目标：能在朋友圈信息流里被人停下来看。
- * - 画作铺满上半部分并渐隐融入背景，作为视觉主体（不是缩略图）
- * - 作品名做大标题，是最强的个人化钩子
- * - 金句大字排版，是视觉主角
- * - 底部留一个反问，制造好奇缺口，让人想点进来
+ * 三个设计决定：
  *
- * 隐私红线（不可放宽）：
- * - 报告大量引用用户问卷原文（这是它的优点），但那些句子绝不能上卡片。
- *   「手腕很用力，呼吸有点急促」这类自述属于极私密内容。
- *   因此排除所有含引号与"你提到/你说"的句子。
- * - 不显示查询码，避免他人凭码查看报告
+ * 1. **不放画作**。用户的画本身可能很私密，默认放上去等于替他们做了决定。
+ *    改为从画作提取主色生成抽象光晕背景 —— 每个人的卡片色调都不同，
+ *    有个性化，但看不出画了什么。
+ *
+ * 2. **金句由模型针对这幅画现写**，不是从语录库里挑。
+ *    通用语录正是巴纳姆效应的温床，与本项目立场冲突。
+ *
+ * 3. **绝不含问卷原文**。这条在服务端提示词里也强制约束了。
  */
 
 const W = 1080;
 const H = 1320;
-const ART_H = 700;
-const M = 84;
+const M = 88;
 
-export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
-  const [includeDrawing, setIncludeDrawing] = useState(true);
+/** 从画作提取主色，跳过接近纸白与纯黑的颜色 */
+function extractPalette(img) {
+  const c = document.createElement('canvas');
+  c.width = 80;
+  c.height = 80;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, 80, 80);
+  const { data } = ctx.getImageData(0, 0, 80, 80);
+
+  const buckets = new Map();
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const v = max / 255;
+    const s = max === 0 ? 0 : (max - min) / max;
+    if (v > 0.93 && s < 0.12) continue; // 纸白
+    if (v < 0.12) continue; // 纯黑
+    const key = `${r >> 5}_${g >> 5}_${b >> 5}`;
+    const cur = buckets.get(key) || { r: 0, g: 0, b: 0, n: 0 };
+    cur.r += r;
+    cur.g += g;
+    cur.b += b;
+    cur.n += 1;
+    buckets.set(key, cur);
+  }
+
+  const sorted = [...buckets.values()].sort((a, b) => b.n - a.n).slice(0, 3);
+  const cols = sorted.map((x) => {
+    let r = x.r / x.n;
+    let g = x.g / x.n;
+    let b = x.b / x.n;
+    // 压暗并提高饱和，作为深色背景上的光晕
+    const mx = Math.max(r, g, b) || 1;
+    const boost = Math.min(1.35, 190 / mx);
+    r = Math.min(255, r * boost) * 0.55;
+    g = Math.min(255, g * boost) * 0.55;
+    b = Math.min(255, b * boost) * 0.55;
+    return [Math.round(r), Math.round(g), Math.round(b)];
+  });
+
+  while (cols.length < 3) cols.push(cols[cols.length - 1] || [70, 60, 110]);
+  return cols;
+}
+
+export default function ShareCard({ apiBase, sessionId, drawingUrl, siteUrl, onClose }) {
+  const [material, setMaterial] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [dataUrl, setDataUrl] = useState('');
   const canvasRef = useRef(null);
 
-  const pickQuote = () => {
-    const QUOTE_CHARS = /[“”"「」『』]/;
-    const SELF_REF = /(你提到|你说|你写|你描述|你在.{0,6}中(提到|写)|如你所说|你特别提到)/;
-
-    const sentences = [];
-    for (const d of report?.dimensions || []) {
-      sentences.push(...String(d.content).split(/(?<=[。？！])/));
-    }
-    sentences.push(...String(report?.summary || '').split(/(?<=[。？！])/));
-
-    const safe = sentences
-      .map((s) => s.trim())
-      .filter(
-        (s) => s.length >= 12 && s.length <= 40 && !QUOTE_CHARS.test(s) && !SELF_REF.test(s)
-      );
-
-    const reflective = safe.find((s) =>
-      /(也许|或许|似乎|可能|值得|不必|已经|仍然|其实)/.test(s)
-    );
-    return (reflective || safe[0] || '').replace(/[。？！]$/, '');
-  };
-
-  const quote = pickQuote();
-  const question = report?.questions?.[0] || '';
-  const title = report?.drawingTitle || '';
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`${apiBase}/api/report/${sessionId}/share`, {
+          credentials: 'include'
+        });
+        const d = await r.json();
+        if (!alive) return;
+        if (!r.ok) throw new Error(d.error || '素材生成失败');
+        setMaterial(d);
+      } catch (e) {
+        if (alive) setError(e.message);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [apiBase, sessionId]);
 
   const render = async () => {
+    if (!material) return;
     setBusy(true);
     try {
       const cv = canvasRef.current;
       const ctx = cv.getContext('2d');
       const F = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif';
 
-      ctx.fillStyle = '#0c0e14';
-      ctx.fillRect(0, 0, W, H);
-
-      // 画作铺满上半部分，底部渐隐
-      let artDrawn = false;
-      if (includeDrawing && drawingUrl) {
+      // 取配色（失败则用默认冷紫）
+      let palette = [
+        [72, 48, 96],
+        [110, 72, 60],
+        [48, 60, 100]
+      ];
+      if (drawingUrl) {
         try {
           const img = await new Promise((res, rej) => {
             const im = new Image();
@@ -75,36 +120,49 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
             im.onerror = rej;
             im.src = drawingUrl;
           });
-
-          const sc = Math.max(W / img.width, ART_H / img.height);
-          const dw = img.width * sc;
-          const dh = img.height * sc;
-          ctx.drawImage(img, (W - dw) / 2, 0, dw, dh);
-
-          const fade = ctx.createLinearGradient(0, ART_H * 0.42, 0, ART_H);
-          fade.addColorStop(0, 'rgba(12,14,20,0)');
-          fade.addColorStop(1, 'rgba(12,14,20,1)');
-          ctx.fillStyle = fade;
-          ctx.fillRect(0, 0, W, ART_H);
-          artDrawn = true;
+          palette = extractPalette(img);
         } catch {
-          /* 加载失败则退化为纯色版式 */
+          /* 用默认配色 */
         }
       }
 
-      if (!artDrawn) {
-        const g = ctx.createRadialGradient(W * 0.5, 260, 0, W * 0.5, 260, 620);
-        g.addColorStop(0, 'rgba(196,132,40,0.28)');
-        g.addColorStop(1, 'rgba(12,14,20,0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, W, ART_H);
-      }
+      // 深色底
+      const base = ctx.createLinearGradient(0, 0, 0, H);
+      base.addColorStop(0, '#0b0d13');
+      base.addColorStop(1, '#12151f');
+      ctx.fillStyle = base;
+      ctx.fillRect(0, 0, W, H);
 
-      const bg = ctx.createLinearGradient(0, ART_H, 0, H);
-      bg.addColorStop(0, '#0c0e14');
-      bg.addColorStop(1, '#12151f');
-      ctx.fillStyle = bg;
-      ctx.fillRect(0, ART_H, W, H - ART_H);
+      // 三团柔光
+      const spots = [
+        [W * 0.28, H * 0.18, 620],
+        [W * 0.82, H * 0.42, 560],
+        [W * 0.45, H * 0.82, 600]
+      ];
+      ctx.globalCompositeOperation = 'lighter';
+      spots.forEach(([cx, cy, rad], i) => {
+        const [r, g, b] = palette[i] || palette[0];
+        const gr = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+        gr.addColorStop(0, `rgba(${r},${g},${b},0.85)`);
+        gr.addColorStop(0.55, `rgba(${r},${g},${b},0.28)`);
+        gr.addColorStop(1, `rgba(${r},${g},${b},0)`);
+        ctx.fillStyle = gr;
+        ctx.fillRect(0, 0, W, H);
+      });
+      ctx.globalCompositeOperation = 'source-over';
+
+      // 顶底压暗，保证文字可读
+      const top = ctx.createLinearGradient(0, 0, 0, 300);
+      top.addColorStop(0, 'rgba(11,13,19,0.55)');
+      top.addColorStop(1, 'rgba(11,13,19,0)');
+      ctx.fillStyle = top;
+      ctx.fillRect(0, 0, W, 300);
+
+      const bot = ctx.createLinearGradient(0, H - 420, 0, H);
+      bot.addColorStop(0, 'rgba(11,13,19,0)');
+      bot.addColorStop(1, 'rgba(11,13,19,0.72)');
+      ctx.fillStyle = bot;
+      ctx.fillRect(0, H - 420, W, 420);
 
       const wrap = (text, maxW) => {
         const lines = [];
@@ -119,73 +177,74 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
         return lines;
       };
 
-      ctx.fillStyle = '#d6b260';
+      ctx.fillStyle = '#ceac64';
       ctx.font = `500 26px ${F}`;
-      ctx.fillText('MINDART · 绘画心理探索', M, 78);
+      ctx.fillText('MINDART · 绘画心理探索', M, 88);
 
-      let y = 508;
-
-      if (title) {
+      let y = 300;
+      if (material.drawingTitle) {
         ctx.fillStyle = '#faf8f4';
-        ctx.font = `700 82px ${F}`;
-        ctx.fillText(`《${title}》`, M, y);
-        y += 126;
-      } else {
-        y = 560;
+        ctx.font = `700 78px ${F}`;
+        ctx.fillText(`《${material.drawingTitle}》`, M, y);
+        y += 122;
       }
 
       ctx.fillStyle = '#d4a017';
-      ctx.fillRect(M, y, 84, 5);
-      y += 62;
+      ctx.fillRect(M, y, 80, 5);
+      y += 84;
 
-      ctx.fillStyle = '#f0eeea';
-      ctx.font = `600 46px ${F}`;
-      for (const l of wrap(quote, W - M * 2).slice(0, 3)) {
+      ctx.fillStyle = '#f5f3ef';
+      ctx.font = `600 52px ${F}`;
+      for (const l of wrap(material.quote, W - M * 2).slice(0, 4)) {
         ctx.fillText(l, M, y);
-        y += 70;
+        y += 78;
       }
 
-      if (question) {
-        y += 44;
-        const barTop = y - 32;
+      if (material.question) {
+        y += 110;
+        const barTop = y - 30;
 
-        ctx.fillStyle = '#9298a8';
-        ctx.font = `400 25px ${F}`;
-        ctx.fillText('它反问了我一句', M + 30, y);
+        ctx.fillStyle = '#969cac';
+        ctx.font = `400 24px ${F}`;
+        ctx.fillText('它反问了我一句', M + 32, y);
         y += 46;
 
-        ctx.fillStyle = '#d4dae6';
-        ctx.font = `400 33px ${F}`;
-        const qLines = wrap(question, W - M * 2 - 40).slice(0, 2);
-        for (const l of qLines) {
-          ctx.fillText(l, M + 30, y);
-          y += 46;
+        ctx.fillStyle = '#d0d6e4';
+        ctx.font = `400 31px ${F}`;
+        for (const l of wrap(material.question, W - M * 2 - 44).slice(0, 2)) {
+          ctx.fillText(l, M + 32, y);
+          y += 44;
         }
 
         ctx.fillStyle = '#d4a017';
-        ctx.fillRect(M, barTop, 5, y - barTop - 14);
+        ctx.fillRect(M, barTop, 5, y - barTop - 18);
       }
 
-      const foot = H - 128;
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      const foot = H - 150;
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)';
       ctx.beginPath();
-      ctx.moveTo(M, foot - 44);
-      ctx.lineTo(W - M, foot - 44);
+      ctx.moveTo(M, foot - 46);
+      ctx.lineTo(W - M, foot - 46);
       ctx.stroke();
 
       ctx.fillStyle = '#f4f2ee';
-      ctx.font = `500 35px ${F}`;
+      ctx.font = `500 34px ${F}`;
       ctx.fillText('画一张画，看看它会对你说什么', M, foot);
 
       ctx.fillStyle = '#d4a017';
       ctx.font = `400 26px ${F}`;
-      ctx.fillText(siteUrl.replace(/^https?:\/\//, ''), M, foot + 54);
+      ctx.fillText(siteUrl.replace(/^https?:\/\//, ''), M, foot + 52);
 
       setDataUrl(cv.toDataURL('image/png'));
     } finally {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (material && !dataUrl) render();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [material]);
 
   const download = () => {
     const a = document.createElement('a');
@@ -201,37 +260,33 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
           <X size={18} />
         </button>
 
-        <h3>生成分享卡片</h3>
+        <h3>分享卡片</h3>
         <p className="share-privacy">
-          卡片只包含报告中的一句话与一个问题，
-          <strong>不会包含你的问卷回答</strong>，也不会显示查询码。
+          卡片<strong>不包含你的画作和问卷回答</strong>，背景只取用画中的色调。
         </p>
-
-        <label className="share-opt">
-          <input
-            type="checkbox"
-            checked={includeDrawing}
-            onChange={(e) => {
-              setIncludeDrawing(e.target.checked);
-              setDataUrl('');
-            }}
-          />
-          <span>包含我的画作（更好看，也更容易被朋友注意到）</span>
-        </label>
 
         <canvas ref={canvasRef} width={W} height={H} style={{ display: 'none' }} />
 
-        {dataUrl ? (
+        {loading ? (
+          <div className="my-reports-empty">
+            <Loader2 className="animate-spin" size={18} />
+            <span>正在为这幅画写一句话…</span>
+          </div>
+        ) : error ? (
+          <div className="error-banner">
+            <span>{error}</span>
+          </div>
+        ) : dataUrl ? (
           <>
             <img src={dataUrl} alt="分享卡片" className="share-preview" />
             <button className="btn btn-primary btn-full" onClick={download}>
               <Download size={16} /> 保存图片
             </button>
-            <p className="share-tip">长按或保存后即可分享到朋友圈</p>
+            <p className="share-tip">保存后即可分享到朋友圈</p>
           </>
         ) : (
           <button className="btn btn-primary btn-full" onClick={render} disabled={busy}>
-            {busy ? <Loader2 className="animate-spin" size={16} /> : <Share2 size={16} />}
+            {busy ? <Loader2 className="animate-spin" size={16} /> : <RefreshCw size={16} />}
             生成卡片
           </button>
         )}

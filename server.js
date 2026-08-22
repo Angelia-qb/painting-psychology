@@ -6,7 +6,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import 'dotenv/config';
 import { fileURLToPath } from 'url';
-import { generateReport } from './lib/analyzer.js';
+import { generateReport, generateShareQuote } from './lib/analyzer.js';
 import { newShortCode, normalizeShortCode } from './lib/shortcode.js';
 import { rateLimit } from './lib/rateLimit.js';
 import { createUserStore } from './lib/users.js';
@@ -586,6 +586,51 @@ app.get('/api/my-reports', auth.requireAuth, reportLimiter, (req, res) => {
 /* ------------------------------- 管理员接口 -------------------------------- */
 
 
+
+
+/**
+ * 分享卡片素材：金句 + 从画作提取的配色
+ *
+ * 金句由模型现写并缓存到会话目录，重复请求不重复调用模型。
+ * 配色只返回几个主色值，前端据此绘制抽象背景——
+ * 这样卡片带有个人色彩，但不暴露画作内容。
+ */
+app.get('/api/report/:sessionId/share', auth.requireAuth, reportLimiter, loadOwnedSession, async (req, res) => {
+  const sessionId = req.sessionIdResolved;
+  const dir = sessionPathOf(sessionId);
+  const reportPath = path.join(dir, 'report.json');
+
+  if (!fs.existsSync(reportPath)) {
+    return res.status(404).json({ error: '报告尚未生成' });
+  }
+
+  const report = JSON.parse(fs.readFileSync(reportPath, 'utf-8'));
+  const cachePath = path.join(dir, 'share.json');
+
+  if (fs.existsSync(cachePath)) {
+    return res.json(JSON.parse(fs.readFileSync(cachePath, 'utf-8')));
+  }
+
+  try {
+    const quote = await generateShareQuote({
+      drawingTitle: req.sessionAnswers.drawingTitle,
+      report
+    });
+
+    const payload = {
+      quote,
+      question: report.questions?.[0] || '',
+      drawingTitle: req.sessionAnswers.drawingTitle || '',
+      generatedAt: new Date().toISOString()
+    };
+
+    fs.writeFileSync(cachePath, JSON.stringify(payload, null, 2), 'utf-8');
+    return res.json(payload);
+  } catch (err) {
+    console.error('[Share] 金句生成失败:', err.message);
+    return res.status(503).json({ error: err.friendly || '金句生成失败，请稍后重试' });
+  }
+});
 
 /* ------------------------------ 积分 / 邀请 / 订单 ----------------------------- */
 
