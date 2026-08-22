@@ -307,7 +307,7 @@ export default function ReportViewer({ initialSessionId, user }) {
 
       {sharing && data?.report && (
         <ShareCard
-          report={data.report}
+          report={{ ...data.report, drawingTitle: data.answers?.drawingTitle }}
           drawingUrl={`${API_BASE}/${data.answers.relativeImagePath}`}
           siteUrl={window.location.origin}
           onClose={() => setSharing(false)}

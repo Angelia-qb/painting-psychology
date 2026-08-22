@@ -4,56 +4,33 @@ import { Share2, Download, Loader2, X } from 'lucide-react';
 /**
  * 分享卡片
  *
- * 隐私红线（不可放宽）：
- * - 只放报告中的一句金句，绝不放问卷原文
- *   （问卷里是"手腕很用力""加完班很空虚"这类极私密的自述）
- * - 画作由用户自己选择是否包含，默认不含
- * - 不显示查询码，避免他人凭码查看
+ * 设计目标：能在朋友圈信息流里被人停下来看。
+ * - 画作铺满上半部分并渐隐融入背景，作为视觉主体（不是缩略图）
+ * - 作品名做大标题，是最强的个人化钩子
+ * - 金句大字排版，是视觉主角
+ * - 底部留一个反问，制造好奇缺口，让人想点进来
  *
- * 全部在浏览器 canvas 里绘制，图片不经服务器。
+ * 隐私红线（不可放宽）：
+ * - 报告大量引用用户问卷原文（这是它的优点），但那些句子绝不能上卡片。
+ *   「手腕很用力，呼吸有点急促」这类自述属于极私密内容。
+ *   因此排除所有含引号与"你提到/你说"的句子。
+ * - 不显示查询码，避免他人凭码查看报告
  */
 
-const W = 800;
-const H = 1200;
-
-function wrapText(ctx, text, maxWidth) {
-  const lines = [];
-  let line = '';
-  for (const ch of text) {
-    if (ch === '\n') {
-      lines.push(line);
-      line = '';
-      continue;
-    }
-    if (ctx.measureText(line + ch).width > maxWidth) {
-      lines.push(line);
-      line = ch;
-    } else {
-      line += ch;
-    }
-  }
-  if (line) lines.push(line);
-  return lines;
-}
+const W = 1080;
+const H = 1320;
+const ART_H = 700;
+const M = 84;
 
 export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
-  const [includeDrawing, setIncludeDrawing] = useState(false);
+  const [includeDrawing, setIncludeDrawing] = useState(true);
   const [busy, setBusy] = useState(false);
   const [dataUrl, setDataUrl] = useState('');
   const canvasRef = useRef(null);
 
-  /**
-   * 挑一句适合公开的话。
-   *
-   * ⚠️ 报告本身大量引用用户问卷原文（这正是它的优点），
-   * 但这些句子绝不能出现在分享卡片上——
-   * 「手腕很用力，呼吸有点急促」这类自述属于极私密内容。
-   *
-   * 因此必须排除任何含引号的句子，只保留模型自己的表述。
-   */
   const pickQuote = () => {
     const QUOTE_CHARS = /[“”"「」『』]/;
-    const SELF_REF = /(你提到|你说|你写|你描述|你在.{0,6}中(提到|写)|如你所说)/;
+    const SELF_REF = /(你提到|你说|你写|你描述|你在.{0,6}中(提到|写)|如你所说|你特别提到)/;
 
     const sentences = [];
     for (const d of report?.dimensions || []) {
@@ -64,131 +41,145 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
     const safe = sentences
       .map((s) => s.trim())
       .filter(
-        (s) =>
-          s.length >= 16 &&
-          s.length <= 70 &&
-          !QUOTE_CHARS.test(s) && // 排除引用问卷原文
-          !SELF_REF.test(s) // 排除"你提到…"这类复述
+        (s) => s.length >= 12 && s.length <= 40 && !QUOTE_CHARS.test(s) && !SELF_REF.test(s)
       );
 
-    // 优先选带有反思意味的句子
-    const reflective = safe.find((s) => /(也许|或许|似乎|可能|值得|不必|已经|仍然)/.test(s));
-    return reflective || safe[0] || '';
+    const reflective = safe.find((s) =>
+      /(也许|或许|似乎|可能|值得|不必|已经|仍然|其实)/.test(s)
+    );
+    return (reflective || safe[0] || '').replace(/[。？！]$/, '');
   };
 
   const quote = pickQuote();
   const question = report?.questions?.[0] || '';
+  const title = report?.drawingTitle || '';
 
   const render = async () => {
     setBusy(true);
     try {
       const cv = canvasRef.current;
       const ctx = cv.getContext('2d');
+      const F = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif';
 
-      // 背景
-      const g = ctx.createLinearGradient(0, 0, W, H);
-      g.addColorStop(0, '#141824');
-      g.addColorStop(1, '#1d2334');
-      ctx.fillStyle = g;
+      ctx.fillStyle = '#0c0e14';
       ctx.fillRect(0, 0, W, H);
 
-      // 装饰光晕
-      const glow = ctx.createRadialGradient(W * 0.8, 120, 0, W * 0.8, 120, 340);
-      glow.addColorStop(0, 'rgba(212,160,23,0.18)');
-      glow.addColorStop(1, 'rgba(212,160,23,0)');
-      ctx.fillStyle = glow;
-      ctx.fillRect(0, 0, W, 500);
-
-      let y = 96;
-
-      ctx.fillStyle = '#d4a017';
-      ctx.font = '600 30px system-ui, -apple-system, "PingFang SC", sans-serif';
-      ctx.fillText('🎨 MindArt Studio', 64, y);
-
-      y += 46;
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
-      ctx.font = '400 22px system-ui, "PingFang SC", sans-serif';
-      ctx.fillText('自由表达绘画心理探索', 64, y);
-
-      y += 70;
-
-      // 可选：画作
+      // 画作铺满上半部分，底部渐隐
+      let artDrawn = false;
       if (includeDrawing && drawingUrl) {
         try {
-          const img = await new Promise((resolve, reject) => {
+          const img = await new Promise((res, rej) => {
             const im = new Image();
-            im.crossOrigin = 'anonymous';
-            im.onload = () => resolve(im);
-            im.onerror = reject;
+            im.crossOrigin = 'use-credentials';
+            im.onload = () => res(im);
+            im.onerror = rej;
             im.src = drawingUrl;
           });
-          const boxW = W - 128;
-          const boxH = 300;
-          const scale = Math.min(boxW / img.width, boxH / img.height);
-          const dw = img.width * scale;
-          const dh = img.height * scale;
-          ctx.save();
-          ctx.globalAlpha = 0.95;
-          ctx.drawImage(img, 64 + (boxW - dw) / 2, y, dw, dh);
-          ctx.restore();
-          y += boxH + 50;
+
+          const sc = Math.max(W / img.width, ART_H / img.height);
+          const dw = img.width * sc;
+          const dh = img.height * sc;
+          ctx.drawImage(img, (W - dw) / 2, 0, dw, dh);
+
+          const fade = ctx.createLinearGradient(0, ART_H * 0.42, 0, ART_H);
+          fade.addColorStop(0, 'rgba(12,14,20,0)');
+          fade.addColorStop(1, 'rgba(12,14,20,1)');
+          ctx.fillStyle = fade;
+          ctx.fillRect(0, 0, W, ART_H);
+          artDrawn = true;
         } catch {
-          /* 图片加载失败就跳过 */
+          /* 加载失败则退化为纯色版式 */
         }
       }
 
-      // 金句
-      ctx.fillStyle = 'rgba(212,160,23,0.85)';
-      ctx.font = '700 64px Georgia, serif';
-      ctx.fillText('"', 64, y + 20);
-
-      y += 40;
-      ctx.fillStyle = '#f2f4f8';
-      ctx.font = '400 34px system-ui, "PingFang SC", sans-serif';
-      const lines = wrapText(ctx, quote, W - 160).slice(0, 6);
-      for (const l of lines) {
-        ctx.fillText(l, 80, y);
-        y += 54;
+      if (!artDrawn) {
+        const g = ctx.createRadialGradient(W * 0.5, 260, 0, W * 0.5, 260, 620);
+        g.addColorStop(0, 'rgba(196,132,40,0.28)');
+        g.addColorStop(1, 'rgba(12,14,20,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, ART_H);
       }
 
-      // 思考题
+      const bg = ctx.createLinearGradient(0, ART_H, 0, H);
+      bg.addColorStop(0, '#0c0e14');
+      bg.addColorStop(1, '#12151f');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, ART_H, W, H - ART_H);
+
+      const wrap = (text, maxW) => {
+        const lines = [];
+        let line = '';
+        for (const ch of text) {
+          if (ctx.measureText(line + ch).width > maxW) {
+            lines.push(line);
+            line = ch;
+          } else line += ch;
+        }
+        if (line) lines.push(line);
+        return lines;
+      };
+
+      ctx.fillStyle = '#d6b260';
+      ctx.font = `500 26px ${F}`;
+      ctx.fillText('MINDART · 绘画心理探索', M, 78);
+
+      let y = 508;
+
+      if (title) {
+        ctx.fillStyle = '#faf8f4';
+        ctx.font = `700 82px ${F}`;
+        ctx.fillText(`《${title}》`, M, y);
+        y += 126;
+      } else {
+        y = 560;
+      }
+
+      ctx.fillStyle = '#d4a017';
+      ctx.fillRect(M, y, 84, 5);
+      y += 62;
+
+      ctx.fillStyle = '#f0eeea';
+      ctx.font = `600 46px ${F}`;
+      for (const l of wrap(quote, W - M * 2).slice(0, 3)) {
+        ctx.fillText(l, M, y);
+        y += 70;
+      }
+
       if (question) {
-        y += 40;
-        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-        ctx.beginPath();
-        ctx.moveTo(64, y);
-        ctx.lineTo(W - 64, y);
-        ctx.stroke();
-
-        y += 48;
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.font = '400 22px system-ui, "PingFang SC", sans-serif';
-        ctx.fillText('它问了我一个问题', 64, y);
-
         y += 44;
-        ctx.fillStyle = '#c8cfdd';
-        ctx.font = '400 27px system-ui, "PingFang SC", sans-serif';
-        for (const l of wrapText(ctx, question, W - 160).slice(0, 3)) {
-          ctx.fillText(l, 64, y);
-          y += 42;
+        const barTop = y - 32;
+
+        ctx.fillStyle = '#9298a8';
+        ctx.font = `400 25px ${F}`;
+        ctx.fillText('它反问了我一句', M + 30, y);
+        y += 46;
+
+        ctx.fillStyle = '#d4dae6';
+        ctx.font = `400 33px ${F}`;
+        const qLines = wrap(question, W - M * 2 - 40).slice(0, 2);
+        for (const l of qLines) {
+          ctx.fillText(l, M + 30, y);
+          y += 46;
         }
+
+        ctx.fillStyle = '#d4a017';
+        ctx.fillRect(M, barTop, 5, y - barTop - 14);
       }
 
-      // 底部
-      const footY = H - 130;
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      const foot = H - 128;
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
       ctx.beginPath();
-      ctx.moveTo(64, footY - 40);
-      ctx.lineTo(W - 64, footY - 40);
+      ctx.moveTo(M, foot - 44);
+      ctx.lineTo(W - M, foot - 44);
       ctx.stroke();
 
-      ctx.fillStyle = 'rgba(255,255,255,0.75)';
-      ctx.font = '500 26px system-ui, "PingFang SC", sans-serif';
-      ctx.fillText('画一张画，听听它想对你说什么', 64, footY);
+      ctx.fillStyle = '#f4f2ee';
+      ctx.font = `500 35px ${F}`;
+      ctx.fillText('画一张画，看看它会对你说什么', M, foot);
 
-      ctx.fillStyle = 'rgba(212,160,23,0.9)';
-      ctx.font = '400 23px system-ui, sans-serif';
-      ctx.fillText(siteUrl.replace(/^https?:\/\//, ''), 64, footY + 42);
+      ctx.fillStyle = '#d4a017';
+      ctx.font = `400 26px ${F}`;
+      ctx.fillText(siteUrl.replace(/^https?:\/\//, ''), M, foot + 54);
 
       setDataUrl(cv.toDataURL('image/png'));
     } finally {
@@ -212,7 +203,8 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
 
         <h3>生成分享卡片</h3>
         <p className="share-privacy">
-          只包含报告中的一句话与一个问题，<strong>不会包含你的问卷回答</strong>。
+          卡片只包含报告中的一句话与一个问题，
+          <strong>不会包含你的问卷回答</strong>，也不会显示查询码。
         </p>
 
         <label className="share-opt">
@@ -224,7 +216,7 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
               setDataUrl('');
             }}
           />
-          <span>包含我的画作（默认不含）</span>
+          <span>包含我的画作（更好看，也更容易被朋友注意到）</span>
         </label>
 
         <canvas ref={canvasRef} width={W} height={H} style={{ display: 'none' }} />
@@ -232,12 +224,10 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
         {dataUrl ? (
           <>
             <img src={dataUrl} alt="分享卡片" className="share-preview" />
-            <div className="share-actions">
-              <button className="btn btn-primary btn-full" onClick={download}>
-                <Download size={16} /> 保存图片
-              </button>
-              <p className="share-tip">保存后即可分享到朋友圈或发给朋友</p>
-            </div>
+            <button className="btn btn-primary btn-full" onClick={download}>
+              <Download size={16} /> 保存图片
+            </button>
+            <p className="share-tip">长按或保存后即可分享到朋友圈</p>
           </>
         ) : (
           <button className="btn btn-primary btn-full" onClick={render} disabled={busy}>
