@@ -42,18 +42,38 @@ export default function ShareCard({ report, drawingUrl, siteUrl, onClose }) {
   const [dataUrl, setDataUrl] = useState('');
   const canvasRef = useRef(null);
 
-  // 从报告里挑一句最有分量的：优先第一个维度的首句，其次 summary
+  /**
+   * 挑一句适合公开的话。
+   *
+   * ⚠️ 报告本身大量引用用户问卷原文（这正是它的优点），
+   * 但这些句子绝不能出现在分享卡片上——
+   * 「手腕很用力，呼吸有点急促」这类自述属于极私密内容。
+   *
+   * 因此必须排除任何含引号的句子，只保留模型自己的表述。
+   */
   const pickQuote = () => {
-    const candidates = [];
-    if (report?.dimensions?.[0]?.content) {
-      const first = report.dimensions[0].content.split(/[。？！]/).filter((s) => s.trim().length > 12);
-      if (first[0]) candidates.push(first[0].trim() + '。');
+    const QUOTE_CHARS = /[“”"「」『』]/;
+    const SELF_REF = /(你提到|你说|你写|你描述|你在.{0,6}中(提到|写)|如你所说)/;
+
+    const sentences = [];
+    for (const d of report?.dimensions || []) {
+      sentences.push(...String(d.content).split(/(?<=[。？！])/));
     }
-    if (report?.summary) {
-      const s = report.summary.split(/[。？！]/).filter((x) => x.trim().length > 12);
-      if (s[0]) candidates.push(s[0].trim() + '。');
-    }
-    return candidates[0] || report?.summary?.slice(0, 60) || '';
+    sentences.push(...String(report?.summary || '').split(/(?<=[。？！])/));
+
+    const safe = sentences
+      .map((s) => s.trim())
+      .filter(
+        (s) =>
+          s.length >= 16 &&
+          s.length <= 70 &&
+          !QUOTE_CHARS.test(s) && // 排除引用问卷原文
+          !SELF_REF.test(s) // 排除"你提到…"这类复述
+      );
+
+    // 优先选带有反思意味的句子
+    const reflective = safe.find((s) => /(也许|或许|似乎|可能|值得|不必|已经|仍然)/.test(s));
+    return reflective || safe[0] || '';
   };
 
   const quote = pickQuote();
